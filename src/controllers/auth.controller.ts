@@ -1,5 +1,4 @@
 import { Request, Response } from 'express';
-import jwt from 'jsonwebtoken';
 import { UserModel } from '../models/user.model';
 import { RegisterRequest, LoginRequest, AuthResponse, AuthRequest, UserResponse } from '../types';
 
@@ -40,18 +39,6 @@ export class AuthController {
             // Create user with plain text password (INSECURE!)
             const user = await UserModel.create(username, password);
 
-            // Generate JWT token
-            const jwtSecret = process.env.JWT_SECRET;
-            if (!jwtSecret) {
-                throw new Error('JWT_SECRET is not defined');
-            }
-
-            const token = jwt.sign(
-                { id: user.id, username: user.username },
-                jwtSecret,
-                { expiresIn: process.env.JWT_EXPIRES_IN || '24h' } as jwt.SignOptions
-            );
-
             // Return user data without password
             const userResponse: UserResponse = {
                 id: user.id,
@@ -63,7 +50,7 @@ export class AuthController {
             res.status(201).json({
                 success: true,
                 message: 'User registered successfully',
-                token,
+                token: user.username, // Simple token - just username
                 user: userResponse
             } as AuthResponse);
         } catch (error: any) {
@@ -117,18 +104,6 @@ export class AuthController {
                 return;
             }
 
-            // Generate JWT token
-            const jwtSecret = process.env.JWT_SECRET;
-            if (!jwtSecret) {
-                throw new Error('JWT_SECRET is not defined');
-            }
-
-            const token = jwt.sign(
-                { id: user.id, username: user.username },
-                jwtSecret,
-                { expiresIn: process.env.JWT_EXPIRES_IN || '24h' } as jwt.SignOptions
-            );
-
             // Return user data without password
             const userResponse: UserResponse = {
                 id: user.id,
@@ -140,7 +115,7 @@ export class AuthController {
             res.status(200).json({
                 success: true,
                 message: 'Login successful',
-                token,
+                token: user.username, // Simple token - just username
                 user: userResponse
             } as AuthResponse);
         } catch (error) {
