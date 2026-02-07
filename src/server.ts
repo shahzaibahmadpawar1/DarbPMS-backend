@@ -43,6 +43,24 @@ app.get('/health', async (_req: Request, res: Response) => {
     }
 });
 
+// Root route - API information
+app.get('/', (_req: Request, res: Response) => {
+    res.status(200).json({
+        success: true,
+        message: 'DARB PMS Backend API',
+        version: '1.0.0',
+        endpoints: {
+            health: '/health',
+            auth: {
+                register: 'POST /api/auth/register',
+                login: 'POST /api/auth/login',
+                profile: 'GET /api/auth/profile (requires auth)'
+            }
+        },
+        documentation: 'https://github.com/your-repo/docs'
+    });
+});
+
 // API routes
 app.use('/api/auth', authRoutes);
 
