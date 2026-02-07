@@ -1,10 +1,8 @@
 import { Request, Response } from 'express';
-import bcrypt from 'bcrypt';
 import jwt from 'jsonwebtoken';
 import { UserModel } from '../models/user.model';
 import { RegisterRequest, LoginRequest, AuthResponse, AuthRequest, UserResponse } from '../types';
 
-const SALT_ROUNDS = 10;
 
 export class AuthController {
     // Register a new user
@@ -39,11 +37,8 @@ export class AuthController {
                 return;
             }
 
-            // Hash password
-            const passwordHash = await bcrypt.hash(password, SALT_ROUNDS);
-
-            // Create user
-            const user = await UserModel.create(username, passwordHash);
+            // Create user with plain text password
+            const user = await UserModel.create(username, password);
 
             // Generate JWT token
             const jwtSecret = process.env.JWT_SECRET;
@@ -113,9 +108,8 @@ export class AuthController {
                 return;
             }
 
-            // Verify password
-            const isPasswordValid = await bcrypt.compare(password, user.password_hash);
-            if (!isPasswordValid) {
+            // Verify password (plain text comparison)
+            if (password !== user.password) {
                 res.status(401).json({
                     success: false,
                     message: 'Invalid username or password'

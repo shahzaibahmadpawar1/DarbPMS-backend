@@ -5,27 +5,26 @@ async function testDatabaseConnection() {
 
     try {
         // Test basic connection
-        const result = await pool.query('SELECT NOW() as current_time, version() as pg_version');
+        const [result]: any = await pool.query('SELECT NOW() as current_time, VERSION() as mysql_version');
 
         console.log('✓ Database connection successful!');
-        console.log('Current time:', result.rows[0].current_time);
-        console.log('PostgreSQL version:', result.rows[0].pg_version);
+        console.log('Current time:', result[0].current_time);
+        console.log('MySQL version:', result[0].mysql_version);
 
         // Test if users table exists
-        const tableCheck = await pool.query(`
-      SELECT EXISTS (
-        SELECT FROM information_schema.tables 
-        WHERE table_schema = 'public' 
-        AND table_name = 'users'
-      );
+        const [tableCheck]: any = await pool.query(`
+      SELECT COUNT(*) as table_exists
+      FROM information_schema.tables 
+      WHERE table_schema = DATABASE()
+      AND table_name = 'users'
     `);
 
-        if (tableCheck.rows[0].exists) {
+        if (tableCheck[0].table_exists > 0) {
             console.log('✓ Users table exists');
 
             // Get user count
-            const countResult = await pool.query('SELECT COUNT(*) as count FROM users');
-            console.log(`✓ Current user count: ${countResult.rows[0].count}`);
+            const [countResult]: any = await pool.query('SELECT COUNT(*) as count FROM users');
+            console.log(`✓ Current user count: ${countResult[0].count}`);
         } else {
             console.log('⚠ Users table does not exist. Please run the schema.sql file.');
         }
