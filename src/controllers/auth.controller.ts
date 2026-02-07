@@ -1,7 +1,10 @@
 import { Request, Response } from 'express';
+import bcrypt from 'bcrypt';
 import jwt from 'jsonwebtoken';
 import { UserModel } from '../models/user.model';
 import { RegisterRequest, LoginRequest, AuthResponse, AuthRequest, UserResponse } from '../types';
+
+const SALT_ROUNDS = 10;
 
 
 export class AuthController {
@@ -37,8 +40,11 @@ export class AuthController {
                 return;
             }
 
-            // Create user with plain text password
-            const user = await UserModel.create(username, password);
+            // Hash password
+            const passwordHash = await bcrypt.hash(password, SALT_ROUNDS);
+
+            // Create user
+            const user = await UserModel.create(username, passwordHash);
 
             // Generate JWT token
             const jwtSecret = process.env.JWT_SECRET;
@@ -49,7 +55,7 @@ export class AuthController {
             const token = jwt.sign(
                 { id: user.id, username: user.username },
                 jwtSecret,
-                { expiresIn: process.env.JWT_EXPIRES_IN || '24h' }
+                { expiresIn: process.env.JWT_EXPIRES_IN || '24h' } as jwt.SignOptions
             );
 
             // Return user data without password
@@ -108,8 +114,9 @@ export class AuthController {
                 return;
             }
 
-            // Verify password (plain text comparison)
-            if (password !== user.password) {
+            // Verify password
+            const isPasswordValid = await bcrypt.compare(password, user.password_hash);
+            if (!isPasswordValid) {
                 res.status(401).json({
                     success: false,
                     message: 'Invalid username or password'
@@ -126,7 +133,7 @@ export class AuthController {
             const token = jwt.sign(
                 { id: user.id, username: user.username },
                 jwtSecret,
-                { expiresIn: process.env.JWT_EXPIRES_IN || '24h' }
+                { expiresIn: process.env.JWT_EXPIRES_IN || '24h' } as jwt.SignOptions
             );
 
             // Return user data without password

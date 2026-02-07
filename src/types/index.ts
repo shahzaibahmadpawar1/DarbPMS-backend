@@ -4,7 +4,7 @@ import { Request } from 'express';
 export interface User {
     id: string;
     username: string;
-    password: string;
+    password_hash: string;
     created_at: Date;
     updated_at: Date;
 }
