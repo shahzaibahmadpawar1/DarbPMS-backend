@@ -1,10 +1,15 @@
 import { Request } from 'express';
 
+// User roles
+export type UserRole = 'admin' | 'user';
+
 // User interface matching database schema
 export interface User {
     id: string;
     username: string;
     password: string;
+    role: UserRole;
+    station_id: string | null;
     created_at: Date;
     updated_at: Date;
 }
@@ -13,6 +18,8 @@ export interface User {
 export interface UserResponse {
     id: string;
     username: string;
+    role: UserRole;
+    station_id: string | null;
     created_at: Date;
     updated_at: Date;
 }

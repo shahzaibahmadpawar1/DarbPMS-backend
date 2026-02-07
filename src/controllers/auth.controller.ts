@@ -43,6 +43,8 @@ export class AuthController {
             const userResponse: UserResponse = {
                 id: user.id,
                 username: user.username,
+                role: user.role,
+                station_id: user.station_id,
                 created_at: user.created_at,
                 updated_at: user.updated_at
             };
@@ -108,6 +110,8 @@ export class AuthController {
             const userResponse: UserResponse = {
                 id: user.id,
                 username: user.username,
+                role: user.role,
+                station_id: user.station_id,
                 created_at: user.created_at,
                 updated_at: user.updated_at
             };
@@ -152,6 +156,8 @@ export class AuthController {
             const userResponse: UserResponse = {
                 id: user.id,
                 username: user.username,
+                role: user.role,
+                station_id: user.station_id,
                 created_at: user.created_at,
                 updated_at: user.updated_at
             };

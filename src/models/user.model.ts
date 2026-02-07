@@ -3,15 +3,15 @@ import { User } from '../types';
 
 export class UserModel {
     // Create a new user
-    static async create(username: string, password: string): Promise<User> {
+    static async create(username: string, password: string, role: 'admin' | 'user' = 'user', station_id: string | null = null): Promise<User> {
         const query = `
-      INSERT INTO users (username, password)
-      VALUES ($1, $2)
-      RETURNING id, username, password, created_at, updated_at
+      INSERT INTO users (username, password, role, station_id)
+      VALUES ($1, $2, $3, $4)
+      RETURNING id, username, password, role, station_id, created_at, updated_at
     `;
 
         try {
-            const result = await pool.query(query, [username, password]);
+            const result = await pool.query(query, [username, password, role, station_id]);
             return result.rows[0];
         } catch (error: any) {
             // Handle unique constraint violation
