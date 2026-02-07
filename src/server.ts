@@ -64,28 +64,30 @@ app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
     });
 });
 
-// Start server
-app.listen(PORT, () => {
-    console.log('=================================');
-    console.log('🚀 DARB Backend Server Started');
-    console.log('=================================');
-    console.log(`📍 Server running on port ${PORT}`);
-    console.log(`🌍 Environment: ${process.env.NODE_ENV || 'development'}`);
-    console.log(`🔗 CORS enabled for: ${process.env.CORS_ORIGIN || 'http://localhost:5173'}`);
-    console.log('=================================');
-});
+// Start server only if not in Vercel serverless environment
+if (process.env.NODE_ENV !== 'production' || !process.env.VERCEL) {
+    app.listen(PORT, () => {
+        console.log('=================================');
+        console.log('🚀 DARB Backend Server Started');
+        console.log('=================================');
+        console.log(`📍 Server running on port ${PORT}`);
+        console.log(`🌍 Environment: ${process.env.NODE_ENV || 'development'}`);
+        console.log(`🔗 CORS enabled for: ${process.env.CORS_ORIGIN || 'http://localhost:5173'}`);
+        console.log('=================================');
+    });
 
-// Graceful shutdown
-process.on('SIGTERM', async () => {
-    console.log('SIGTERM signal received: closing HTTP server');
-    await pool.end();
-    process.exit(0);
-});
+    // Graceful shutdown
+    process.on('SIGTERM', async () => {
+        console.log('SIGTERM signal received: closing HTTP server');
+        await pool.end();
+        process.exit(0);
+    });
 
-process.on('SIGINT', async () => {
-    console.log('SIGINT signal received: closing HTTP server');
-    await pool.end();
-    process.exit(0);
-});
+    process.on('SIGINT', async () => {
+        console.log('SIGINT signal received: closing HTTP server');
+        await pool.end();
+        process.exit(0);
+    });
+}
 
 export default app;
