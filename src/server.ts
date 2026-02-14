@@ -2,6 +2,11 @@ import express, { Request, Response, NextFunction } from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import authRoutes from './routes/auth.routes';
+import stationInformationRoutes from './routes/stationInformation.routes';
+import camerasRoutes from './routes/cameras.routes';
+import dispensersRoutes from './routes/dispensers.routes';
+import nozzlesRoutes from './routes/nozzles.routes';
+import tanksRoutes from './routes/tanks.routes';
 import pool from './config/database';
 
 // Load environment variables
@@ -72,7 +77,25 @@ app.get('/', (_req: Request, res: Response) => {
                 register: 'POST /api/auth/register',
                 login: 'POST /api/auth/login',
                 profile: 'GET /api/auth/profile (requires auth)'
-            }
+            },
+            stations: {
+                create: 'POST /api/stations',
+                getAll: 'GET /api/stations',
+                getByCode: 'GET /api/stations/:stationCode',
+                update: 'PUT /api/stations/:stationCode',
+                delete: 'DELETE /api/stations/:stationCode'
+            },
+            cameras: {
+                create: 'POST /api/cameras',
+                getAll: 'GET /api/cameras',
+                getByStation: 'GET /api/cameras/station/:stationCode',
+                getBySerial: 'GET /api/cameras/:serialNumber',
+                update: 'PUT /api/cameras/:serialNumber',
+                delete: 'DELETE /api/cameras/:serialNumber'
+            },
+            dispensers: 'POST/GET/PUT/DELETE /api/dispensers',
+            nozzles: 'POST/GET/PUT/DELETE /api/nozzles',
+            tanks: 'POST/GET/PUT/DELETE /api/tanks'
         },
         documentation: 'https://github.com/your-repo/docs'
     });
@@ -80,6 +103,11 @@ app.get('/', (_req: Request, res: Response) => {
 
 // API routes
 app.use('/api/auth', authRoutes);
+app.use('/api/stations', stationInformationRoutes);
+app.use('/api/cameras', camerasRoutes);
+app.use('/api/dispensers', dispensersRoutes);
+app.use('/api/nozzles', nozzlesRoutes);
+app.use('/api/tanks', tanksRoutes);
 
 // 404 handler
 app.use((_req: Request, res: Response) => {
