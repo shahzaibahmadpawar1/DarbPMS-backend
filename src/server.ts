@@ -7,6 +7,7 @@ import camerasRoutes from './routes/cameras.routes';
 import dispensersRoutes from './routes/dispensers.routes';
 import nozzlesRoutes from './routes/nozzles.routes';
 import tanksRoutes from './routes/tanks.routes';
+import areasRoutes from './routes/areas.routes';
 import pool from './config/database';
 
 // Load environment variables
@@ -95,7 +96,8 @@ app.get('/', (_req: Request, res: Response) => {
             },
             dispensers: 'POST/GET/PUT/DELETE /api/dispensers',
             nozzles: 'POST/GET/PUT/DELETE /api/nozzles',
-            tanks: 'POST/GET/PUT/DELETE /api/tanks'
+            tanks: 'POST/GET/PUT/DELETE /api/tanks',
+            areas: 'POST/GET /api/areas'
         },
         documentation: 'https://github.com/your-repo/docs'
     });
@@ -108,6 +110,7 @@ app.use('/api/cameras', camerasRoutes);
 app.use('/api/dispensers', dispensersRoutes);
 app.use('/api/nozzles', nozzlesRoutes);
 app.use('/api/tanks', tanksRoutes);
+app.use('/api/areas', areasRoutes);
 
 // 404 handler
 app.use((_req: Request, res: Response) => {
