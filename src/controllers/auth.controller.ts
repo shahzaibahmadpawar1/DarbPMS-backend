@@ -1,4 +1,5 @@
 import { Request, Response } from 'express';
+import jwt from 'jsonwebtoken';
 import { UserModel } from '../models/user.model';
 import { RegisterRequest, LoginRequest, AuthResponse, AuthRequest, UserResponse } from '../types';
 
@@ -49,10 +50,22 @@ export class AuthController {
                 updated_at: user.updated_at
             };
 
+            // Generate real JWT token
+            const jwtSecret = process.env.JWT_SECRET;
+            if (!jwtSecret) {
+                throw new Error('JWT_SECRET is not defined in environment variables');
+            }
+
+            const token = jwt.sign(
+                { id: user.id, username: user.username },
+                jwtSecret,
+                { expiresIn: '24h' }
+            );
+
             res.status(201).json({
                 success: true,
                 message: 'User registered successfully',
-                token: user.username, // Simple token - just username
+                token,
                 user: userResponse
             } as AuthResponse);
         } catch (error: any) {
@@ -116,10 +129,22 @@ export class AuthController {
                 updated_at: user.updated_at
             };
 
+            // Generate real JWT token
+            const jwtSecret = process.env.JWT_SECRET;
+            if (!jwtSecret) {
+                throw new Error('JWT_SECRET is not defined in environment variables');
+            }
+
+            const token = jwt.sign(
+                { id: user.id, username: user.username },
+                jwtSecret,
+                { expiresIn: '24h' }
+            );
+
             res.status(200).json({
                 success: true,
                 message: 'Login successful',
-                token: user.username, // Simple token - just username
+                token,
                 user: userResponse
             } as AuthResponse);
         } catch (error) {
