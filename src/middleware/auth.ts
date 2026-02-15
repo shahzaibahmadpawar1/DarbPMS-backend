@@ -23,7 +23,12 @@ export const authenticateToken = (
         // Verify token
         const jwtSecret = process.env.JWT_SECRET;
         if (!jwtSecret) {
-            throw new Error('JWT_SECRET is not defined in environment variables');
+            console.error('AUTH_ERROR: JWT_SECRET is not defined in environment variables');
+            res.status(403).json({
+                success: false,
+                message: 'Server configuration error'
+            });
+            return;
         }
 
         const decoded = jwt.verify(token, jwtSecret) as JWTPayload;
@@ -35,10 +40,12 @@ export const authenticateToken = (
         };
 
         next();
-    } catch (error) {
+    } catch (error: any) {
+        console.error('AUTH_ERROR: Invalid or expired token:', error.message);
         res.status(403).json({
             success: false,
-            message: 'Invalid or expired token'
+            message: 'Invalid or expired token',
+            error: process.env.NODE_ENV === 'development' ? error.message : undefined
         });
         return;
     }
