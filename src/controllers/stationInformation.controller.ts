@@ -100,14 +100,15 @@ export const getStationInformationByCode = async (req: Request, res: Response): 
 
         const query = `
             SELECT * FROM station_information 
-            WHERE station_code = $1
+            WHERE id::text = $1 OR station_code = $1
         `;
 
         const result = await pool.query(query, [stationCode]);
 
         if (result.rows.length === 0) {
             res.status(404).json({
-                error: 'Station not found'
+                error: 'Station not found',
+                identifier: stationCode
             });
             return;
         }
@@ -154,7 +155,7 @@ export const updateStationInformation = async (req: Request, res: Response): Pro
                 station_status_code = COALESCE($8, station_status_code),
                 updated_by = $9,
                 updated_at = CURRENT_TIMESTAMP
-            WHERE station_code = $10
+            WHERE id::text = $10 OR station_code = $10
             RETURNING *
         `;
 
@@ -199,7 +200,7 @@ export const deleteStationInformation = async (req: Request, res: Response): Pro
 
         const query = `
             DELETE FROM station_information 
-            WHERE station_code = $1
+            WHERE id::text = $1 OR station_code = $1
             RETURNING *
         `;
 
