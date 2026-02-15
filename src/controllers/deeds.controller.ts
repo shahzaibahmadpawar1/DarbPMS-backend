@@ -40,7 +40,10 @@ export const createDeed = async (req: Request, res: Response): Promise<void> => 
             res.status(409).json({ error: 'Deed No already exists' });
             return;
         }
-        res.status(500).json({ error: 'Failed to create deed information' });
+        res.status(500).json({
+            error: 'Failed to create deed information',
+            details: error.message
+        });
     }
 };
 
@@ -48,9 +51,9 @@ export const getAllDeeds = async (_req: Request, res: Response): Promise<void> =
     try {
         const result = await pool.query('SELECT * FROM deeds ORDER BY created_at DESC');
         res.status(200).json({ message: 'Deeds retrieved successfully', data: result.rows, count: result.rows.length });
-    } catch (error) {
+    } catch (error: any) {
         console.error('Error fetching deeds:', error);
-        res.status(500).json({ error: 'Failed to fetch deeds' });
+        res.status(500).json({ error: 'Failed to fetch deeds', details: error.message });
     }
 };
 
@@ -59,9 +62,9 @@ export const getDeedsByStation = async (req: Request, res: Response): Promise<vo
         const { stationCode } = req.params;
         const result = await pool.query('SELECT * FROM deeds WHERE station_code = $1 ORDER BY created_at DESC', [stationCode]);
         res.status(200).json({ message: 'Deeds retrieved successfully', data: result.rows, count: result.rows.length });
-    } catch (error) {
+    } catch (error: any) {
         console.error('Error fetching deeds:', error);
-        res.status(500).json({ error: 'Failed to fetch deeds' });
+        res.status(500).json({ error: 'Failed to fetch deeds', details: error.message });
     }
 };
 
@@ -112,9 +115,12 @@ export const updateDeed = async (req: Request, res: Response): Promise<void> => 
             return;
         }
         res.status(200).json({ message: 'Deed updated successfully', data: result.rows[0] });
-    } catch (error) {
+    } catch (error: any) {
         console.error('Error updating deed:', error);
-        res.status(500).json({ error: 'Failed to update deed' });
+        res.status(500).json({
+            error: 'Failed to update deed',
+            details: error.message
+        });
     }
 };
 
@@ -127,8 +133,11 @@ export const deleteDeed = async (req: Request, res: Response): Promise<void> => 
             return;
         }
         res.status(200).json({ message: 'Deed deleted successfully', data: result.rows[0] });
-    } catch (error) {
+    } catch (error: any) {
         console.error('Error deleting deed:', error);
-        res.status(500).json({ error: 'Failed to delete deed' });
+        res.status(500).json({
+            error: 'Failed to delete deed',
+            details: error.message
+        });
     }
 };

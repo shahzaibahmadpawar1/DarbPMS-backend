@@ -48,7 +48,10 @@ export const createContract = async (req: Request, res: Response): Promise<void>
             res.status(409).json({ error: 'Contract No already exists' });
             return;
         }
-        res.status(500).json({ error: 'Failed to create contract' });
+        res.status(500).json({
+            error: 'Failed to create contract',
+            details: error.message
+        });
     }
 };
 
@@ -56,9 +59,9 @@ export const getAllContracts = async (_req: Request, res: Response): Promise<voi
     try {
         const result = await pool.query('SELECT * FROM contracts ORDER BY created_at DESC');
         res.status(200).json({ message: 'Contracts retrieved successfully', data: result.rows, count: result.rows.length });
-    } catch (error) {
+    } catch (error: any) {
         console.error('Error fetching contracts:', error);
-        res.status(500).json({ error: 'Failed to fetch contracts' });
+        res.status(500).json({ error: 'Failed to fetch contracts', details: error.message });
     }
 };
 
@@ -67,9 +70,9 @@ export const getContractsByStation = async (req: Request, res: Response): Promis
         const { stationCode } = req.params;
         const result = await pool.query('SELECT * FROM contracts WHERE station_code = $1 ORDER BY created_at DESC', [stationCode]);
         res.status(200).json({ message: 'Contracts retrieved successfully', data: result.rows, count: result.rows.length });
-    } catch (error) {
+    } catch (error: any) {
         console.error('Error fetching contracts:', error);
-        res.status(500).json({ error: 'Failed to fetch contracts' });
+        res.status(500).json({ error: 'Failed to fetch contracts', details: error.message });
     }
 };
 
@@ -79,7 +82,6 @@ export const updateContract = async (req: Request, res: Response): Promise<void>
         const reqBody = req.body;
         const userId = (req as any).user?.id;
 
-        // Simplified update logic for brevity
         const fields = Object.entries(reqBody).filter(([_, v]) => v !== undefined);
         if (fields.length === 0) {
             res.status(400).json({ error: 'No fields to update' });
@@ -102,9 +104,12 @@ export const updateContract = async (req: Request, res: Response): Promise<void>
             return;
         }
         res.status(200).json({ message: 'Contract updated successfully', data: result.rows[0] });
-    } catch (error) {
+    } catch (error: any) {
         console.error('Error updating contract:', error);
-        res.status(500).json({ error: 'Failed to update contract' });
+        res.status(500).json({
+            error: 'Failed to update contract',
+            details: error.message
+        });
     }
 };
 
@@ -117,8 +122,11 @@ export const deleteContract = async (req: Request, res: Response): Promise<void>
             return;
         }
         res.status(200).json({ message: 'Contract deleted successfully', data: result.rows[0] });
-    } catch (error) {
+    } catch (error: any) {
         console.error('Error deleting contract:', error);
-        res.status(500).json({ error: 'Failed to delete contract' });
+        res.status(500).json({
+            error: 'Failed to delete contract',
+            details: error.message
+        });
     }
 };

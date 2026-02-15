@@ -42,7 +42,10 @@ export const createCommercialLicense = async (req: Request, res: Response): Prom
             res.status(409).json({ error: 'License No already exists' });
             return;
         }
-        res.status(500).json({ error: 'Failed to create commercial license' });
+        res.status(500).json({
+            error: 'Failed to create commercial license',
+            details: error.message
+        });
     }
 };
 
@@ -50,9 +53,9 @@ export const getAllCommercialLicenses = async (_req: Request, res: Response): Pr
     try {
         const result = await pool.query('SELECT * FROM commercial_licenses ORDER BY created_at DESC');
         res.status(200).json({ message: 'Commercial Licenses retrieved successfully', data: result.rows, count: result.rows.length });
-    } catch (error) {
+    } catch (error: any) {
         console.error('Error fetching commercial licenses:', error);
-        res.status(500).json({ error: 'Failed to fetch commercial licenses' });
+        res.status(500).json({ error: 'Failed to fetch commercial licenses', details: error.message });
     }
 };
 
@@ -61,9 +64,9 @@ export const getCommercialLicensesByStation = async (req: Request, res: Response
         const { stationCode } = req.params;
         const result = await pool.query('SELECT * FROM commercial_licenses WHERE station_code = $1 ORDER BY created_at DESC', [stationCode]);
         res.status(200).json({ message: 'Commercial Licenses retrieved successfully', data: result.rows, count: result.rows.length });
-    } catch (error) {
+    } catch (error: any) {
         console.error('Error fetching commercial licenses:', error);
-        res.status(500).json({ error: 'Failed to fetch commercial licenses' });
+        res.status(500).json({ error: 'Failed to fetch commercial licenses', details: error.message });
     }
 };
 
@@ -95,9 +98,12 @@ export const updateCommercialLicense = async (req: Request, res: Response): Prom
             return;
         }
         res.status(200).json({ message: 'Commercial License updated successfully', data: result.rows[0] });
-    } catch (error) {
+    } catch (error: any) {
         console.error('Error updating commercial license:', error);
-        res.status(500).json({ error: 'Failed to update commercial license' });
+        res.status(500).json({
+            error: 'Failed to update commercial license',
+            details: error.message
+        });
     }
 };
 
@@ -110,8 +116,11 @@ export const deleteCommercialLicense = async (req: Request, res: Response): Prom
             return;
         }
         res.status(200).json({ message: 'Commercial License deleted successfully', data: result.rows[0] });
-    } catch (error) {
+    } catch (error: any) {
         console.error('Error deleting commercial license:', error);
-        res.status(500).json({ error: 'Failed to delete commercial license' });
+        res.status(500).json({
+            error: 'Failed to delete commercial license',
+            details: error.message
+        });
     }
 };

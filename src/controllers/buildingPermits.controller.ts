@@ -51,7 +51,10 @@ export const createBuildingPermit = async (req: Request, res: Response): Promise
             res.status(409).json({ error: 'Permit Number already exists' });
             return;
         }
-        res.status(500).json({ error: 'Failed to create building permit' });
+        res.status(500).json({
+            error: 'Failed to create building permit',
+            details: error.message
+        });
     }
 };
 
@@ -59,9 +62,9 @@ export const getAllBuildingPermits = async (_req: Request, res: Response): Promi
     try {
         const result = await pool.query('SELECT * FROM building_permits ORDER BY created_at DESC');
         res.status(200).json({ message: 'Building Permits retrieved successfully', data: result.rows, count: result.rows.length });
-    } catch (error) {
+    } catch (error: any) {
         console.error('Error fetching building permits:', error);
-        res.status(500).json({ error: 'Failed to fetch building permits' });
+        res.status(500).json({ error: 'Failed to fetch building permits', details: error.message });
     }
 };
 
@@ -70,9 +73,9 @@ export const getBuildingPermitsByStation = async (req: Request, res: Response): 
         const { stationCode } = req.params;
         const result = await pool.query('SELECT * FROM building_permits WHERE station_code = $1 ORDER BY created_at DESC', [stationCode]);
         res.status(200).json({ message: 'Building Permits retrieved successfully', data: result.rows, count: result.rows.length });
-    } catch (error) {
+    } catch (error: any) {
         console.error('Error fetching building permits:', error);
-        res.status(500).json({ error: 'Failed to fetch building permits' });
+        res.status(500).json({ error: 'Failed to fetch building permits', details: error.message });
     }
 };
 
@@ -140,9 +143,12 @@ export const updateBuildingPermit = async (req: Request, res: Response): Promise
             return;
         }
         res.status(200).json({ message: 'Building Permit updated successfully', data: result.rows[0] });
-    } catch (error) {
+    } catch (error: any) {
         console.error('Error updating building permit:', error);
-        res.status(500).json({ error: 'Failed to update building permit' });
+        res.status(500).json({
+            error: 'Failed to update building permit',
+            details: error.message
+        });
     }
 };
 
@@ -155,8 +161,11 @@ export const deleteBuildingPermit = async (req: Request, res: Response): Promise
             return;
         }
         res.status(200).json({ message: 'Building Permit deleted successfully', data: result.rows[0] });
-    } catch (error) {
+    } catch (error: any) {
         console.error('Error deleting building permit:', error);
-        res.status(500).json({ error: 'Failed to delete building permit' });
+        res.status(500).json({
+            error: 'Failed to delete building permit',
+            details: error.message
+        });
     }
 };

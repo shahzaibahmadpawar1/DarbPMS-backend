@@ -37,7 +37,10 @@ export const createOwner = async (req: Request, res: Response): Promise<void> =>
             res.status(409).json({ error: 'Owner ID already exists' });
             return;
         }
-        res.status(500).json({ error: 'Failed to create owner information' });
+        res.status(500).json({
+            error: 'Failed to create owner information',
+            details: error.message
+        });
     }
 };
 
@@ -45,9 +48,9 @@ export const getAllOwners = async (_req: Request, res: Response): Promise<void> 
     try {
         const result = await pool.query('SELECT * FROM owners ORDER BY created_at DESC');
         res.status(200).json({ message: 'Owners retrieved successfully', data: result.rows, count: result.rows.length });
-    } catch (error) {
+    } catch (error: any) {
         console.error('Error fetching owners:', error);
-        res.status(500).json({ error: 'Failed to fetch owners' });
+        res.status(500).json({ error: 'Failed to fetch owners', details: error.message });
     }
 };
 
@@ -56,9 +59,9 @@ export const getOwnersByStation = async (req: Request, res: Response): Promise<v
         const { stationCode } = req.params;
         const result = await pool.query('SELECT * FROM owners WHERE station_code = $1 ORDER BY created_at DESC', [stationCode]);
         res.status(200).json({ message: 'Owners retrieved successfully', data: result.rows, count: result.rows.length });
-    } catch (error) {
+    } catch (error: any) {
         console.error('Error fetching owners:', error);
-        res.status(500).json({ error: 'Failed to fetch owners' });
+        res.status(500).json({ error: 'Failed to fetch owners', details: error.message });
     }
 };
 
@@ -99,9 +102,12 @@ export const updateOwner = async (req: Request, res: Response): Promise<void> =>
             return;
         }
         res.status(200).json({ message: 'Owner updated successfully', data: result.rows[0] });
-    } catch (error) {
+    } catch (error: any) {
         console.error('Error updating owner:', error);
-        res.status(500).json({ error: 'Failed to update owner' });
+        res.status(500).json({
+            error: 'Failed to update owner',
+            details: error.message
+        });
     }
 };
 
@@ -114,8 +120,11 @@ export const deleteOwner = async (req: Request, res: Response): Promise<void> =>
             return;
         }
         res.status(200).json({ message: 'Owner deleted successfully', data: result.rows[0] });
-    } catch (error) {
+    } catch (error: any) {
         console.error('Error deleting owner:', error);
-        res.status(500).json({ error: 'Failed to delete owner' });
+        res.status(500).json({
+            error: 'Failed to delete owner',
+            details: error.message
+        });
     }
 };
