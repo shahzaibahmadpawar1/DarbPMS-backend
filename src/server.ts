@@ -8,6 +8,11 @@ import dispensersRoutes from './routes/dispensers.routes';
 import nozzlesRoutes from './routes/nozzles.routes';
 import tanksRoutes from './routes/tanks.routes';
 import areasRoutes from './routes/areas.routes';
+import ownersRoutes from './routes/owners.routes';
+import deedsRoutes from './routes/deeds.routes';
+import buildingPermitsRoutes from './routes/buildingPermits.routes';
+import contractsRoutes from './routes/contracts.routes';
+import commercialLicensesRoutes from './routes/commercialLicenses.routes';
 import pool from './config/database';
 
 // Load environment variables
@@ -111,6 +116,11 @@ app.use('/api/dispensers', dispensersRoutes);
 app.use('/api/nozzles', nozzlesRoutes);
 app.use('/api/tanks', tanksRoutes);
 app.use('/api/areas', areasRoutes);
+app.use('/api/owners', ownersRoutes);
+app.use('/api/deeds', deedsRoutes);
+app.use('/api/building-permits', buildingPermitsRoutes);
+app.use('/api/contracts', contractsRoutes);
+app.use('/api/commercial-licenses', commercialLicensesRoutes);
 
 // 404 handler
 app.use((_req: Request, res: Response) => {
