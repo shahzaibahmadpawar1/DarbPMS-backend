@@ -224,3 +224,96 @@ export const deleteStationInformation = async (req: Request, res: Response): Pro
         });
     }
 };
+
+// Bulk create station information
+export const bulkCreateStationInformation = async (req: Request, res: Response): Promise<void> => {
+    const client = await pool.connect();
+    try {
+        const stations = req.body;
+        if (!Array.isArray(stations)) {
+            res.status(400).json({ error: 'Expected an array of stations' });
+            return;
+        }
+
+        const userId = (req as any).user?.id;
+        const results = [];
+        const errors = [];
+
+        await client.query('BEGIN');
+
+        for (const station of stations) {
+            try {
+                const {
+                    stationCode,
+                    stationName,
+                    areaRegion,
+                    city,
+                    district,
+                    street,
+                    geographicLocation,
+                    stationTypeCode,
+                    stationStatusCode
+                } = station;
+
+                if (!stationCode || !stationName) {
+                    errors.push({ stationCode, error: 'Station code and name are required' });
+                    continue;
+                }
+
+                const query = `
+                    INSERT INTO station_information (
+                        station_code, station_name, area_region, city, district, 
+                        street, geographic_location, station_type_code, station_status_code,
+                        created_by, updated_by
+                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $10)
+                    ON CONFLICT (station_code) DO UPDATE SET
+                        station_name = EXCLUDED.station_name,
+                        area_region = EXCLUDED.area_region,
+                        city = EXCLUDED.city,
+                        district = EXCLUDED.district,
+                        street = EXCLUDED.street,
+                        geographic_location = EXCLUDED.geographic_location,
+                        station_type_code = EXCLUDED.station_type_code,
+                        station_status_code = EXCLUDED.station_status_code,
+                        updated_by = EXCLUDED.updated_by,
+                        updated_at = CURRENT_TIMESTAMP
+                    RETURNING *
+                `;
+
+                const values = [
+                    stationCode,
+                    stationName,
+                    areaRegion || null,
+                    city || null,
+                    district || null,
+                    street || null,
+                    geographicLocation || null,
+                    stationTypeCode || null,
+                    stationStatusCode || null,
+                    userId
+                ];
+
+                const result = await client.query(query, values);
+                results.push(result.rows[0]);
+            } catch (err: any) {
+                errors.push({ stationCode: station.stationCode, error: err.message });
+            }
+        }
+
+        await client.query('COMMIT');
+
+        res.status(201).json({
+            message: `Processed ${stations.length} stations`,
+            successCount: results.length,
+            errorCount: errors.length,
+            data: results,
+            errors
+        });
+    } catch (error) {
+        await client.query('ROLLBACK');
+        console.error('Error in bulk create:', error);
+        res.status(500).json({ error: 'Internal server error during bulk import' });
+    } finally {
+        client.release();
+    }
+};

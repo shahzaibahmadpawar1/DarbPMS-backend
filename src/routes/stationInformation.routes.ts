@@ -4,7 +4,8 @@ import {
     getAllStationInformation,
     getStationInformationByCode,
     updateStationInformation,
-    deleteStationInformation
+    deleteStationInformation,
+    bulkCreateStationInformation
 } from '../controllers/stationInformation.controller';
 import { authenticateToken } from '../middleware/auth';
 
@@ -12,6 +13,9 @@ const router = Router();
 
 // All routes require authentication
 router.use(authenticateToken);
+
+// Bulk create stations (Must be before general /:stationCode)
+router.post('/bulk', bulkCreateStationInformation);
 
 // Create new station
 router.post('/', createStationInformation);
