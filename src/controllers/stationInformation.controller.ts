@@ -230,6 +230,8 @@ export const bulkCreateStationInformation = async (req: Request, res: Response):
     const client = await pool.connect();
     try {
         const stations = req.body;
+        console.log(`Bulk import: Received ${stations?.length} stations`);
+
         if (!Array.isArray(stations)) {
             res.status(400).json({ error: 'Expected an array of stations' });
             return;
@@ -256,7 +258,12 @@ export const bulkCreateStationInformation = async (req: Request, res: Response):
                 } = station;
 
                 if (!stationCode || !stationName) {
-                    errors.push({ stationCode, error: 'Station code and name are required' });
+                    console.warn('Bulk import: Missing required fields for row:', station);
+                    errors.push({
+                        stationCode: stationCode || 'Unknown',
+                        error: 'Station code and name are required',
+                        receivedData: station
+                    });
                     continue;
                 }
 
