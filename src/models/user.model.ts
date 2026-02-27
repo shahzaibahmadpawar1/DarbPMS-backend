@@ -3,7 +3,7 @@ import { User } from '../types';
 
 export class UserModel {
     // Create a new user
-    static async create(username: string, password: string, role: 'admin' | 'user' = 'user', station_id: string | null = null): Promise<User> {
+    static async create(username: string, password: string, role: 'admin' | 'user' | 'ceo' = 'user', station_id: string | null = null): Promise<User> {
         const query = `
       INSERT INTO users (username, password, role, station_id)
       VALUES ($1, $2, $3, $4)

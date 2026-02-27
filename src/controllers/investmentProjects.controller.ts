@@ -113,6 +113,9 @@ export const updateInvestmentProject = async (req: Request, res: Response): Prom
             ownerType: 'owner_type', designFileUrl: 'design_file_url',
             documentsUrl: 'documents_url', autocadUrl: 'autocad_url',
             stationCode: 'station_code',
+            reviewStatus: 'review_status',
+            pmComment: 'pm_comment',
+            ceoComment: 'ceo_comment'
         };
         const fields = Object.entries(req.body).filter(([_, v]) => v !== undefined);
         if (!fields.length) { res.status(400).json({ error: 'No fields to update' }); return; }
@@ -154,6 +157,41 @@ export const getFeasibilityStats = async (req: Request, res: Response): Promise<
         res.status(200).json({ message: 'Stats retrieved', data: result.rows[0] });
     } catch (error: any) {
         res.status(500).json({ error: 'Failed to fetch stats', details: error.message });
+    }
+};
+
+// ─── UPDATE REVIEW STATUS ────────────────────────────────────────────────────
+export const updateInvestmentProjectReviewStatus = async (req: Request, res: Response): Promise<void> => {
+    try {
+        const { id } = req.params;
+        const { reviewStatus, comment } = req.body;
+        const userId = (req as any).user?.id;
+        const userRole = (req as any).user?.role;
+
+        if (!reviewStatus) {
+            res.status(400).json({ error: 'Review status is required' });
+            return;
+        }
+
+        let query = '';
+        let params: any[] = [];
+
+        if (userRole === 'ceo') {
+            query = `UPDATE investment_projects SET review_status = $1, ceo_comment = $2, updated_by = $3, updated_at = CURRENT_TIMESTAMP WHERE id = $4 RETURNING *`;
+            params = [reviewStatus, comment, userId, id];
+        } else {
+            // Assume PM/User
+            query = `UPDATE investment_projects SET review_status = $1, pm_comment = $2, updated_by = $3, updated_at = CURRENT_TIMESTAMP WHERE id = $4 RETURNING *`;
+            params = [reviewStatus, comment, userId, id];
+        }
+
+        const result = await pool.query(query, params);
+        if (!result.rows.length) { res.status(404).json({ error: 'Project not found' }); return; }
+
+        // If approved by CEO, we could potentially do more, but for now just update status
+        res.status(200).json({ message: 'Project review status updated', data: result.rows[0] });
+    } catch (error: any) {
+        res.status(500).json({ error: 'Failed to update review status', details: error.message });
     }
 };
 

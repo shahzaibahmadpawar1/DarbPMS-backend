@@ -1,7 +1,7 @@
 import { Request } from 'express';
 
 // User roles
-export type UserRole = 'admin' | 'user';
+export type UserRole = 'admin' | 'user' | 'ceo';
 
 // User interface matching database schema
 export interface User {

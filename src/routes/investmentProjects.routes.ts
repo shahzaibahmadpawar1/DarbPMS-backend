@@ -8,6 +8,7 @@ import {
     deleteInvestmentProject,
     getFeasibilityStats,
     getContractStats,
+    updateInvestmentProjectReviewStatus,
 } from '../controllers/investmentProjects.controller';
 import { authenticateToken } from '../middleware/auth';
 
@@ -22,6 +23,7 @@ router.get('/feasibility-stats', getFeasibilityStats);
 router.get('/contract-stats', getContractStats);
 router.get('/:id', getInvestmentProjectById);
 router.put('/:id', updateInvestmentProject);
+router.patch('/:id/review', updateInvestmentProjectReviewStatus);
 router.delete('/:id', deleteInvestmentProject);
 
 export default router;
