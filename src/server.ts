@@ -13,6 +13,7 @@ import deedsRoutes from './routes/deeds.routes';
 import buildingPermitsRoutes from './routes/buildingPermits.routes';
 import contractsRoutes from './routes/contracts.routes';
 import commercialLicensesRoutes from './routes/commercialLicenses.routes';
+import governmentLicensesRoutes from './routes/governmentLicenses.routes';
 import pool from './config/database';
 
 // Load environment variables
@@ -121,6 +122,7 @@ app.use('/api/deeds', deedsRoutes);
 app.use('/api/building-permits', buildingPermitsRoutes);
 app.use('/api/contracts', contractsRoutes);
 app.use('/api/commercial-licenses', commercialLicensesRoutes);
+app.use('/api/government-licenses', governmentLicensesRoutes);
 
 // 404 handler
 app.use((_req: Request, res: Response) => {
