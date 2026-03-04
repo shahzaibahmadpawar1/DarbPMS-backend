@@ -7,8 +7,10 @@ export const createInvestmentProject = async (req: Request, res: Response): Prom
         const {
             departmentType, requestType, projectName, projectCode, city, district, area,
             projectStatus, contractType, googleLocation, priorityLevel, orderDate, requestSender,
-            // Elements
-            superMarket, fuelStation, kiosks, retailShop, driveThrough, elementArea,
+            // Elements (counts)
+            superMarket, fuelStation, kiosks, retailShop, driveThrough,
+            // Elements (individual areas)
+            superMarketArea, fuelStationArea, kiosksArea, retailShopArea, driveThroughArea,
             // Owner
             ownerName, ownerContactNo, idNo, nationalAddress, email, ownerType,
             // Attachments (URLs after separate upload)
@@ -26,20 +28,23 @@ export const createInvestmentProject = async (req: Request, res: Response): Prom
             INSERT INTO investment_projects (
                 department_type, request_type, project_name, project_code, city, district, area,
                 project_status, contract_type, google_location, priority_level, order_date, request_sender,
-                super_market, fuel_station, kiosks, retail_shop, drive_through, element_area,
+                super_market, fuel_station, kiosks, retail_shop, drive_through,
+                super_market_area, fuel_station_area, kiosks_area, retail_shop_area, drive_through_area,
                 owner_name, owner_contact_no, id_no, national_address, email, owner_type,
                 design_file_url, documents_url, autocad_url,
                 station_code, created_by, updated_by
             ) VALUES (
                 $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,
-                $14,$15,$16,$17,$18,$19,
-                $20,$21,$22,$23,$24,$25,
-                $26,$27,$28,$29,$30,$30
+                $14,$15,$16,$17,$18,
+                $19,$20,$21,$22,$23,
+                $24,$25,$26,$27,$28,$29,
+                $30,$31,$32,$33,$34,$34
             ) RETURNING *`,
             [
                 departmentType, requestType, projectName, projectCode, city, district, area || 0,
                 projectStatus, contractType, googleLocation, priorityLevel, orderDate || null, requestSender,
-                superMarket || 0, fuelStation || 0, kiosks || 0, retailShop || 0, driveThrough || 0, elementArea || 0,
+                superMarket || 0, fuelStation || 0, kiosks || 0, retailShop || 0, driveThrough || 0,
+                superMarketArea || 0, fuelStationArea || 0, kiosksArea || 0, retailShopArea || 0, driveThroughArea || 0,
                 ownerName, ownerContactNo, idNo, nationalAddress, email, ownerType || 'individual',
                 designFileUrl, documentsUrl, autocadUrl,
                 stationCode, userId,
