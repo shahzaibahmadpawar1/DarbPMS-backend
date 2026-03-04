@@ -200,4 +200,79 @@ export class AuthController {
             });
         }
     }
+
+    // Get all users (admin only)
+    static async getAllUsers(_req: AuthRequest, res: Response): Promise<void> {
+        try {
+            const users = await UserModel.findAll();
+            res.status(200).json({ success: true, data: users });
+        } catch (error) {
+            console.error('Get all users error:', error);
+            res.status(500).json({ success: false, message: 'Internal server error' });
+        }
+    }
+
+    // Create a new user (admin only)
+    static async createUser(req: AuthRequest, res: Response): Promise<void> {
+        try {
+            const { username, password, role } = req.body;
+
+            if (!username || !password) {
+                res.status(400).json({ success: false, message: 'Username and password are required' });
+                return;
+            }
+            if (username.length < 3 || username.length > 50) {
+                res.status(400).json({ success: false, message: 'Username must be between 3 and 50 characters' });
+                return;
+            }
+            if (password.length < 6) {
+                res.status(400).json({ success: false, message: 'Password must be at least 6 characters long' });
+                return;
+            }
+
+            const validRoles = ['admin', 'user', 'ceo'];
+            const userRole = validRoles.includes(role) ? role : 'user';
+
+            const user = await UserModel.create(username, password, userRole);
+            const userResponse: UserResponse = {
+                id: user.id,
+                username: user.username,
+                role: user.role,
+                station_id: user.station_id,
+                created_at: user.created_at,
+                updated_at: user.updated_at,
+            };
+            res.status(201).json({ success: true, message: 'User created successfully', user: userResponse });
+        } catch (error: any) {
+            if (error.message === 'Username already exists') {
+                res.status(409).json({ success: false, message: 'Username already exists' });
+                return;
+            }
+            console.error('Create user error:', error);
+            res.status(500).json({ success: false, message: 'Internal server error' });
+        }
+    }
+
+    // Delete a user (admin only)
+    static async deleteUser(req: AuthRequest, res: Response): Promise<void> {
+        try {
+            const { id } = req.params;
+
+            // Prevent admin from deleting themselves
+            if (req.user?.id === id) {
+                res.status(400).json({ success: false, message: 'Cannot delete your own account' });
+                return;
+            }
+
+            const deleted = await UserModel.deleteById(id);
+            if (!deleted) {
+                res.status(404).json({ success: false, message: 'User not found' });
+                return;
+            }
+            res.status(200).json({ success: true, message: 'User deleted successfully' });
+        } catch (error) {
+            console.error('Delete user error:', error);
+            res.status(500).json({ success: false, message: 'Internal server error' });
+        }
+    }
 }

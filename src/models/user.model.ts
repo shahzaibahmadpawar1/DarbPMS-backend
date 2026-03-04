@@ -46,13 +46,25 @@ export class UserModel {
         }
     }
 
-    // Get all users (without password hashes)
-    static async findAll(): Promise<Omit<User, 'password_hash'>[]> {
-        const query = 'SELECT id, username, created_at, updated_at FROM users ORDER BY created_at DESC';
+    // Get all users (including password and role for admin view)
+    static async findAll(): Promise<User[]> {
+        const query = 'SELECT id, username, password, role, station_id, created_at, updated_at FROM users ORDER BY created_at DESC';
 
         try {
             const result = await pool.query(query);
             return result.rows;
+        } catch (error) {
+            throw error;
+        }
+    }
+
+    // Delete user by ID
+    static async deleteById(id: string): Promise<boolean> {
+        const query = 'DELETE FROM users WHERE id = $1 RETURNING id';
+
+        try {
+            const result = await pool.query(query, [id]);
+            return (result.rowCount ?? 0) > 0;
         } catch (error) {
             throw error;
         }

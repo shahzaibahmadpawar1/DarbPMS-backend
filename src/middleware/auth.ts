@@ -1,6 +1,7 @@
 import { Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
 import { AuthRequest, JWTPayload } from '../types';
+import { UserModel } from '../models/user.model';
 
 export const authenticateToken = (
     req: AuthRequest,
@@ -48,5 +49,27 @@ export const authenticateToken = (
             error: process.env.NODE_ENV === 'development' ? error.message : undefined
         });
         return;
+    }
+};
+
+export const requireAdmin = async (
+    req: AuthRequest,
+    res: Response,
+    next: NextFunction
+): Promise<void> => {
+    if (!req.user?.id) {
+        res.status(401).json({ success: false, message: 'Authentication required' });
+        return;
+    }
+
+    try {
+        const user = await UserModel.findById(req.user.id);
+        if (!user || user.role !== 'admin') {
+            res.status(403).json({ success: false, message: 'Admin access required' });
+            return;
+        }
+        next();
+    } catch (error) {
+        res.status(500).json({ success: false, message: 'Internal server error' });
     }
 };
