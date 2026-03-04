@@ -16,6 +16,7 @@ import commercialLicensesRoutes from './routes/commercialLicenses.routes';
 import governmentLicensesRoutes from './routes/governmentLicenses.routes';
 import investmentProjectsRoutes from './routes/investmentProjects.routes';
 import pool from './config/database';
+import { authenticateToken } from './middleware/auth';
 
 // Load environment variables
 dotenv.config();
@@ -125,6 +126,75 @@ app.use('/api/contracts', contractsRoutes);
 app.use('/api/commercial-licenses', commercialLicensesRoutes);
 app.use('/api/government-licenses', governmentLicensesRoutes);
 app.use('/api/investment-projects', investmentProjectsRoutes);
+
+// ── Dashboard stats (authenticated) ──────────────────────────────────────────
+app.get('/api/dashboard/stats', authenticateToken, async (_req: Request, res: Response) => {
+    try {
+        const [stationsResult, projectsResult, recentResult, stationsListResult] = await Promise.all([
+            pool.query(`
+                SELECT
+                    COUNT(*) AS total,
+                    COUNT(*) FILTER (WHERE station_status_code ILIKE '%execution%' OR station_status_code ILIKE '%progress%') AS under_execution,
+                    COUNT(*) FILTER (WHERE station_status_code ILIKE '%not started%' OR station_status_code IS NULL) AS not_started,
+                    COUNT(*) FILTER (WHERE station_status_code ILIKE '%operation%' OR station_status_code ILIKE '%active%') AS operational,
+                    COUNT(*) FILTER (WHERE station_status_code ILIKE '%soon%' OR station_status_code ILIKE '%opening%') AS opening_soon,
+                    COUNT(*) FILTER (WHERE created_at >= date_trunc('month', CURRENT_DATE)) AS new_this_month
+                FROM station_information
+            `),
+            pool.query(`
+                SELECT
+                    COUNT(*) AS total,
+                    COUNT(*) FILTER (WHERE review_status = 'Pending Review') AS pending_review,
+                    COUNT(*) FILTER (WHERE review_status = 'Validated') AS validated,
+                    COUNT(*) FILTER (WHERE review_status = 'Approved') AS approved,
+                    COUNT(*) FILTER (WHERE review_status = 'Rejected') AS rejected
+                FROM investment_projects
+            `),
+            pool.query(`
+                SELECT project_name, review_status, created_at, department_type
+                FROM investment_projects
+                ORDER BY created_at DESC
+                LIMIT 5
+            `),
+            pool.query(`
+                SELECT station_name, station_status_code, created_at
+                FROM station_information
+                ORDER BY created_at DESC
+                LIMIT 10
+            `),
+        ]);
+
+        res.status(200).json({
+            stations: stationsResult.rows[0],
+            projects: projectsResult.rows[0],
+            recentActivities: recentResult.rows,
+            stationsList: stationsListResult.rows,
+        });
+    } catch (error: any) {
+        console.error('Dashboard stats error:', error);
+        res.status(500).json({ error: 'Failed to fetch dashboard stats', details: error.message });
+    }
+});
+
+// ── Tasks / Activity feed (authenticated) ─────────────────────────────────────
+app.get('/api/tasks', authenticateToken, async (req: Request, res: Response) => {
+    try {
+        const userRole = (req as any).user?.role;
+
+        let query = '';
+        if (userRole === 'ceo') {
+            query = `SELECT * FROM investment_projects WHERE review_status IN ('Validated', 'Approved', 'Rejected') ORDER BY created_at DESC`;
+        } else {
+            query = `SELECT * FROM investment_projects ORDER BY created_at DESC`;
+        }
+
+        const result = await pool.query(query);
+        res.status(200).json({ data: result.rows });
+    } catch (error: any) {
+        console.error('Tasks fetch error:', error);
+        res.status(500).json({ error: 'Failed to fetch tasks', details: error.message });
+    }
+});
 
 // 404 handler
 app.use((_req: Request, res: Response) => {

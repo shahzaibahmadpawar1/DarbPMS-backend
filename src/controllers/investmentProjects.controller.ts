@@ -193,7 +193,41 @@ export const updateInvestmentProjectReviewStatus = async (req: Request, res: Res
         const result = await pool.query(query, params);
         if (!result.rows.length) { res.status(404).json({ error: 'Project not found' }); return; }
 
-        // If approved by CEO, we could potentially do more, but for now just update status
+        // If approved by CEO, auto-create a station in station_information
+        if (reviewStatus === 'Approved') {
+            const project = result.rows[0];
+            try {
+                await pool.query(`
+                    INSERT INTO station_information (
+                        station_code, station_name, city, district,
+                        geographic_location, station_type_code, station_status_code,
+                        created_by, updated_by
+                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8)
+                    ON CONFLICT (station_code) DO UPDATE SET
+                        station_name = EXCLUDED.station_name,
+                        city = EXCLUDED.city,
+                        district = EXCLUDED.district,
+                        geographic_location = EXCLUDED.geographic_location,
+                        station_type_code = EXCLUDED.station_type_code,
+                        station_status_code = EXCLUDED.station_status_code,
+                        updated_by = EXCLUDED.updated_by,
+                        updated_at = CURRENT_TIMESTAMP
+                `, [
+                    project.project_code,
+                    project.project_name,
+                    project.city,
+                    project.district,
+                    project.google_location,
+                    project.department_type?.toUpperCase() || 'INVESTMENT',
+                    project.project_status || 'Active',
+                    userId,
+                ]);
+            } catch (stationErr: any) {
+                console.error('Warning: Failed to auto-create station on approval:', stationErr.message);
+                // Don't fail the whole request — just log and continue
+            }
+        }
+
         res.status(200).json({ message: 'Project review status updated', data: result.rows[0] });
     } catch (error: any) {
         res.status(500).json({ error: 'Failed to update review status', details: error.message });
