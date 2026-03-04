@@ -230,7 +230,7 @@ export class AuthController {
                 return;
             }
 
-            const validRoles = ['admin', 'user', 'ceo'];
+            const validRoles = ['admin', 'user', 'ceo', 'investment_user', 'franchise_user'];
             const userRole = validRoles.includes(role) ? role : 'user';
 
             const user = await UserModel.create(username, password, userRole);
