@@ -45,11 +45,15 @@ export const translateTexts = async (req: Request, res: Response): Promise<void>
             translateOptions.glossary = glossaryId;
         }
 
+        // DeepL requires an explicit source language when a glossary is used.
+        // Passing null (auto-detect) causes the glossary to be silently ignored.
+        const sourceLang: deepl.SourceLanguageCode = 'en';
+
         let results: deepl.TextResult | deepl.TextResult[];
         try {
             results = await deeplClient.translateText(
                 nonEmptyTexts,
-                null,
+                sourceLang,
                 targetLang as deepl.TargetLanguageCode,
                 translateOptions
             );
