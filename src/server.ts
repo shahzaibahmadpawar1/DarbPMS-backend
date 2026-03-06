@@ -15,6 +15,7 @@ import contractsRoutes from './routes/contracts.routes';
 import commercialLicensesRoutes from './routes/commercialLicenses.routes';
 import governmentLicensesRoutes from './routes/governmentLicenses.routes';
 import investmentProjectsRoutes from './routes/investmentProjects.routes';
+import translationsRoutes from './routes/translations.routes';
 import pool from './config/database';
 import { authenticateToken } from './middleware/auth';
 
@@ -126,6 +127,7 @@ app.use('/api/contracts', contractsRoutes);
 app.use('/api/commercial-licenses', commercialLicensesRoutes);
 app.use('/api/government-licenses', governmentLicensesRoutes);
 app.use('/api/investment-projects', investmentProjectsRoutes);
+app.use('/api/translate', translationsRoutes);
 
 // ── Dashboard stats (authenticated) ──────────────────────────────────────────
 app.get('/api/dashboard/stats', authenticateToken, async (_req: Request, res: Response) => {
