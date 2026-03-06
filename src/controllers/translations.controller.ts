@@ -1,9 +1,14 @@
 import { Request, Response } from 'express';
 import * as deepl from 'deepl-node';
+import { getActiveGlossaryId } from '../services/glossary';
 
-const DEEPL_API_KEY = 'ce8036ed-8a04-42b9-8596-0ff2483c359d:fx';
+const DEEPL_API_KEY = process.env.DEEPL_API_KEY || 'ce8036ed-8a04-42b9-8596-0ff2483c359d:fx';
 
 const deeplClient = new deepl.DeepLClient(DEEPL_API_KEY);
+
+// Warm up: resolve the glossary ID once at startup so the first request
+// does not incur the verification round-trip.
+let glossaryIdPromise: Promise<string | null> = getActiveGlossaryId();
 
 export const translateTexts = async (req: Request, res: Response): Promise<void> => {
     try {
@@ -31,11 +36,39 @@ export const translateTexts = async (req: Request, res: Response): Promise<void>
             return;
         }
 
-        const results = await deeplClient.translateText(
-            nonEmptyTexts,
-            null,
-            targetLang as deepl.TargetLanguageCode
-        );
+        // Resolve glossary ID (cached after first call)
+        const glossaryId = await glossaryIdPromise;
+
+        // Build translate options — attach glossary when available
+        const translateOptions: deepl.TranslateTextOptions = {};
+        if (glossaryId) {
+            translateOptions.glossary = glossaryId;
+        }
+
+        let results: deepl.TextResult | deepl.TextResult[];
+        try {
+            results = await deeplClient.translateText(
+                nonEmptyTexts,
+                null,
+                targetLang as deepl.TargetLanguageCode,
+                translateOptions
+            );
+        } catch (translateErr: unknown) {
+            // If the glossary caused a failure (e.g. deleted remotely), retry without it
+            const errMsg = translateErr instanceof Error ? translateErr.message : '';
+            if (glossaryId && (errMsg.includes('glossary') || errMsg.includes('404'))) {
+                console.warn('[Translation] Glossary error — retrying without glossary:', errMsg);
+                // Reset promise so next request tries to re-create the glossary
+                glossaryIdPromise = getActiveGlossaryId();
+                results = await deeplClient.translateText(
+                    nonEmptyTexts,
+                    null,
+                    targetLang as deepl.TargetLanguageCode
+                );
+            } else {
+                throw translateErr;
+            }
+        }
 
         const translationMap: Record<string, string> = {};
         nonEmptyTexts.forEach((text, i) => {
