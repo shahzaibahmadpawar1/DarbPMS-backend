@@ -1,15 +1,46 @@
 import { Request, Response } from 'express';
 import pool from '../config/database';
 
+const ALLOWED_STATION_TYPES = ['operation', 'rent', 'franchise', 'investment', 'ownership'] as const;
+
+const normalizeStationType = (value: unknown): string | null => {
+    if (value === null || value === undefined || value === '') {
+        return null;
+    }
+
+    const normalized = String(value).trim().toLowerCase();
+    const aliases: Record<string, string> = {
+        frenchise: 'franchise',
+        owned: 'ownership',
+        ownership: 'ownership',
+        owner: 'ownership',
+        rented: 'rent'
+    };
+
+    return aliases[normalized] || normalized;
+};
+
+const isValidStationType = (value: string | null): value is (typeof ALLOWED_STATION_TYPES)[number] => {
+    return value !== null && ALLOWED_STATION_TYPES.includes(value as (typeof ALLOWED_STATION_TYPES)[number]);
+};
+
 export const createOwner = async (req: Request, res: Response): Promise<void> => {
     try {
         const {
             ownerId, ownerName, issueDate, issuePlace, ownerMobile,
             ownerAddress, ownerEmail, stationTypeCode, stationCode
         } = req.body;
+        const normalizedStationTypeCode = normalizeStationType(stationTypeCode);
 
         if (!ownerId || !ownerName || !stationCode) {
             res.status(400).json({ error: 'Owner ID, Owner Name and station code are required' });
+            return;
+        }
+
+        if (normalizedStationTypeCode !== null && !isValidStationType(normalizedStationTypeCode)) {
+            res.status(400).json({
+                error: `Invalid station type. Allowed values: ${ALLOWED_STATION_TYPES.join(', ')}`
+            });
             return;
         }
 
@@ -26,7 +57,7 @@ export const createOwner = async (req: Request, res: Response): Promise<void> =>
 
         const values = [
             ownerId, ownerName, issueDate || null, issuePlace, ownerMobile,
-            ownerAddress, ownerEmail, stationTypeCode, stationCode, userId
+            ownerAddress, ownerEmail, normalizedStationTypeCode, stationCode, userId
         ];
         const result = await pool.query(query, values);
 
@@ -72,6 +103,14 @@ export const updateOwner = async (req: Request, res: Response): Promise<void> =>
             ownerId, ownerName, issueDate, issuePlace, ownerMobile,
             ownerAddress, ownerEmail, stationTypeCode, stationCode
         } = req.body;
+        const normalizedStationTypeCode = normalizeStationType(stationTypeCode);
+
+        if (normalizedStationTypeCode !== null && !isValidStationType(normalizedStationTypeCode)) {
+            res.status(400).json({
+                error: `Invalid station type. Allowed values: ${ALLOWED_STATION_TYPES.join(', ')}`
+            });
+            return;
+        }
         const userId = (req as any).user?.id;
 
         const query = `
@@ -93,7 +132,7 @@ export const updateOwner = async (req: Request, res: Response): Promise<void> =>
 
         const values = [
             ownerId, ownerName, issueDate, issuePlace, ownerMobile,
-            ownerAddress, ownerEmail, stationTypeCode, stationCode, userId, id
+            ownerAddress, ownerEmail, normalizedStationTypeCode, stationCode, userId, id
         ];
         const result = await pool.query(query, values);
 

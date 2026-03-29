@@ -1,6 +1,29 @@
 import { Request, Response } from 'express';
 import pool from '../config/database';
 
+const ALLOWED_STATION_TYPES = ['operation', 'rent', 'franchise', 'investment', 'ownership'] as const;
+
+const normalizeStationType = (value: unknown): string | null => {
+    if (value === null || value === undefined || value === '') {
+        return null;
+    }
+
+    const normalized = String(value).trim().toLowerCase();
+    const aliases: Record<string, string> = {
+        frenchise: 'franchise',
+        owned: 'ownership',
+        ownership: 'ownership',
+        owner: 'ownership',
+        rented: 'rent'
+    };
+
+    return aliases[normalized] || normalized;
+};
+
+const isValidStationType = (value: string | null): value is (typeof ALLOWED_STATION_TYPES)[number] => {
+    return value !== null && ALLOWED_STATION_TYPES.includes(value as (typeof ALLOWED_STATION_TYPES)[number]);
+};
+
 // Create new station information
 export const createStationInformation = async (req: Request, res: Response): Promise<void> => {
     try {
@@ -16,10 +39,19 @@ export const createStationInformation = async (req: Request, res: Response): Pro
             stationStatusCode
         } = req.body;
 
+        const normalizedStationTypeCode = normalizeStationType(stationTypeCode);
+
         // Validate required fields
         if (!stationCode || !stationName) {
             res.status(400).json({
                 error: 'Station code and station name are required'
+            });
+            return;
+        }
+
+        if (normalizedStationTypeCode !== null && !isValidStationType(normalizedStationTypeCode)) {
+            res.status(400).json({
+                error: `Invalid station type. Allowed values: ${ALLOWED_STATION_TYPES.join(', ')}`
             });
             return;
         }
@@ -43,7 +75,7 @@ export const createStationInformation = async (req: Request, res: Response): Pro
             district || null,
             street || null,
             geographicLocation || null,
-            stationTypeCode || null,
+            normalizedStationTypeCode,
             stationStatusCode || null,
             userId
         ];
@@ -140,6 +172,15 @@ export const updateStationInformation = async (req: Request, res: Response): Pro
             stationStatusCode
         } = req.body;
 
+        const normalizedStationTypeCode = normalizeStationType(stationTypeCode);
+
+        if (normalizedStationTypeCode !== null && !isValidStationType(normalizedStationTypeCode)) {
+            res.status(400).json({
+                error: `Invalid station type. Allowed values: ${ALLOWED_STATION_TYPES.join(', ')}`
+            });
+            return;
+        }
+
         const userId = (req as any).user?.id;
 
         const query = `
@@ -166,7 +207,7 @@ export const updateStationInformation = async (req: Request, res: Response): Pro
             district,
             street,
             geographicLocation,
-            stationTypeCode,
+            normalizedStationTypeCode,
             stationStatusCode,
             userId,
             stationCode
@@ -257,12 +298,22 @@ export const bulkCreateStationInformation = async (req: Request, res: Response):
                     stationStatusCode
                 } = station;
 
+                const normalizedStationTypeCode = normalizeStationType(stationTypeCode);
+
                 if (!stationCode || !stationName) {
                     console.warn('Bulk import: Missing required fields for row:', station);
                     errors.push({
                         stationCode: stationCode || 'Unknown',
                         error: 'Station code and name are required',
                         receivedData: station
+                    });
+                    continue;
+                }
+
+                if (normalizedStationTypeCode !== null && !isValidStationType(normalizedStationTypeCode)) {
+                    errors.push({
+                        stationCode,
+                        error: `Invalid station type '${stationTypeCode}'. Allowed values: ${ALLOWED_STATION_TYPES.join(', ')}`
                     });
                     continue;
                 }
@@ -295,7 +346,7 @@ export const bulkCreateStationInformation = async (req: Request, res: Response):
                     district || null,
                     street || null,
                     geographicLocation || null,
-                    stationTypeCode || null,
+                    normalizedStationTypeCode,
                     stationStatusCode || null,
                     userId
                 ];
