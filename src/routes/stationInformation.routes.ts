@@ -7,7 +7,12 @@ import {
     deleteStationInformation,
     bulkCreateStationInformation
 } from '../controllers/stationInformation.controller';
-import { authenticateToken } from '../middleware/auth';
+import {
+    authenticateToken,
+    requireCapability,
+    requireDepartmentMatchFromBody,
+    requireStationDepartmentAccess
+} from '../middleware/auth';
 
 const router = Router();
 
@@ -15,21 +20,21 @@ const router = Router();
 router.use(authenticateToken);
 
 // Bulk create stations (Must be before general /:stationCode)
-router.post('/bulk', bulkCreateStationInformation);
+router.post('/bulk', requireCapability('create'), bulkCreateStationInformation);
 
 // Create new station
-router.post('/', createStationInformation);
+router.post('/', requireCapability('create'), requireDepartmentMatchFromBody('stationTypeCode'), createStationInformation);
 
 // Get all stations
-router.get('/', getAllStationInformation);
+router.get('/', requireCapability('view'), getAllStationInformation);
 
 // Get station by code
-router.get('/:stationCode', getStationInformationByCode);
+router.get('/:stationCode', requireCapability('view'), requireStationDepartmentAccess({ paramField: 'stationCode' }), getStationInformationByCode);
 
 // Update station
-router.put('/:stationCode', updateStationInformation);
+router.put('/:stationCode', requireCapability('edit'), requireStationDepartmentAccess({ paramField: 'stationCode' }), updateStationInformation);
 
 // Delete station
-router.delete('/:stationCode', deleteStationInformation);
+router.delete('/:stationCode', requireCapability('delete'), requireStationDepartmentAccess({ paramField: 'stationCode' }), deleteStationInformation);
 
 export default router;

@@ -32,9 +32,19 @@ export const createSalamahLicense = async (req: Request, res: Response): Promise
     }
 };
 
-export const getAllSalamahLicenses = async (_req: Request, res: Response): Promise<void> => {
+export const getAllSalamahLicenses = async (req: Request, res: Response): Promise<void> => {
     try {
-        const result = await pool.query('SELECT * FROM salamah_licenses ORDER BY created_at DESC');
+        const userRole = (req as any).user?.role;
+        const userDepartment = (req as any).user?.department;
+        const query = userRole === 'super_admin'
+            ? 'SELECT * FROM salamah_licenses ORDER BY created_at DESC'
+            : `
+                SELECT s.* FROM salamah_licenses s
+                INNER JOIN station_information si ON si.station_code = s.station_code
+                WHERE (CASE WHEN lower(si.station_type_code) = 'frenchise' THEN 'franchise' ELSE lower(si.station_type_code) END) = $1
+                ORDER BY s.created_at DESC
+            `;
+        const result = await pool.query(query, userRole === 'super_admin' ? [] : [userDepartment]);
         res.status(200).json({ message: 'Salamah Licenses retrieved successfully', data: result.rows, count: result.rows.length });
     } catch (error: any) {
         res.status(500).json({ error: 'Failed to fetch Salamah licenses', details: error.message });
@@ -95,9 +105,19 @@ export const createTaqyeesLicense = async (req: Request, res: Response): Promise
     }
 };
 
-export const getAllTaqyeesLicenses = async (_req: Request, res: Response): Promise<void> => {
+export const getAllTaqyeesLicenses = async (req: Request, res: Response): Promise<void> => {
     try {
-        const result = await pool.query('SELECT * FROM taqyees_licenses ORDER BY created_at DESC');
+        const userRole = (req as any).user?.role;
+        const userDepartment = (req as any).user?.department;
+        const query = userRole === 'super_admin'
+            ? 'SELECT * FROM taqyees_licenses ORDER BY created_at DESC'
+            : `
+                SELECT t.* FROM taqyees_licenses t
+                INNER JOIN station_information si ON si.station_code = t.station_code
+                WHERE (CASE WHEN lower(si.station_type_code) = 'frenchise' THEN 'franchise' ELSE lower(si.station_type_code) END) = $1
+                ORDER BY t.created_at DESC
+            `;
+        const result = await pool.query(query, userRole === 'super_admin' ? [] : [userDepartment]);
         res.status(200).json({ message: 'Taqyees Licenses retrieved', data: result.rows, count: result.rows.length });
     } catch (error: any) {
         res.status(500).json({ error: 'Failed to fetch Taqyees licenses', details: error.message });
@@ -171,9 +191,19 @@ export const createEnvironmentalLicense = async (req: Request, res: Response): P
     }
 };
 
-export const getAllEnvironmentalLicenses = async (_req: Request, res: Response): Promise<void> => {
+export const getAllEnvironmentalLicenses = async (req: Request, res: Response): Promise<void> => {
     try {
-        const result = await pool.query('SELECT * FROM environmental_licenses ORDER BY created_at DESC');
+        const userRole = (req as any).user?.role;
+        const userDepartment = (req as any).user?.department;
+        const query = userRole === 'super_admin'
+            ? 'SELECT * FROM environmental_licenses ORDER BY created_at DESC'
+            : `
+                SELECT e.* FROM environmental_licenses e
+                INNER JOIN station_information si ON si.station_code = e.station_code
+                WHERE (CASE WHEN lower(si.station_type_code) = 'frenchise' THEN 'franchise' ELSE lower(si.station_type_code) END) = $1
+                ORDER BY e.created_at DESC
+            `;
+        const result = await pool.query(query, userRole === 'super_admin' ? [] : [userDepartment]);
         res.status(200).json({ message: 'Environmental Licenses retrieved', data: result.rows, count: result.rows.length });
     } catch (error: any) {
         res.status(500).json({ error: 'Failed to fetch Environmental licenses', details: error.message });

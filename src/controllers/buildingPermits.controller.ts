@@ -58,9 +58,19 @@ export const createBuildingPermit = async (req: Request, res: Response): Promise
     }
 };
 
-export const getAllBuildingPermits = async (_req: Request, res: Response): Promise<void> => {
+export const getAllBuildingPermits = async (req: Request, res: Response): Promise<void> => {
     try {
-        const result = await pool.query('SELECT * FROM building_permits ORDER BY created_at DESC');
+        const userRole = (req as any).user?.role;
+        const userDepartment = (req as any).user?.department;
+        const query = userRole === 'super_admin'
+            ? 'SELECT * FROM building_permits ORDER BY created_at DESC'
+            : `
+                SELECT b.* FROM building_permits b
+                INNER JOIN station_information si ON si.station_code = b.station_code
+                WHERE (CASE WHEN lower(si.station_type_code) = 'frenchise' THEN 'franchise' ELSE lower(si.station_type_code) END) = $1
+                ORDER BY b.created_at DESC
+            `;
+        const result = await pool.query(query, userRole === 'super_admin' ? [] : [userDepartment]);
         res.status(200).json({ message: 'Building Permits retrieved successfully', data: result.rows, count: result.rows.length });
     } catch (error: any) {
         console.error('Error fetching building permits:', error);

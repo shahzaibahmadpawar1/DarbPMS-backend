@@ -1,7 +1,23 @@
 import { Request, Response } from 'express';
 import jwt from 'jsonwebtoken';
 import { UserModel } from '../models/user.model';
-import { RegisterRequest, LoginRequest, AuthResponse, AuthRequest, UserResponse } from '../types';
+import { RegisterRequest, LoginRequest, AuthResponse, AuthRequest, Department, UserResponse, UserRole } from '../types';
+
+const validRoles: UserRole[] = ['super_admin', 'department_manager', 'supervisor', 'employee'];
+const validDepartments: Department[] = ['investment', 'franchise'];
+
+const normalizeDepartment = (value: unknown): Department | null => {
+    if (value === null || value === undefined || value === '') {
+        return null;
+    }
+
+    const normalized = String(value).trim().toLowerCase();
+    if (normalized === 'frenchise') {
+        return 'franchise';
+    }
+
+    return validDepartments.includes(normalized as Department) ? (normalized as Department) : null;
+};
 
 
 export class AuthController {
@@ -38,13 +54,26 @@ export class AuthController {
             }
 
             // Create user with plain text password (INSECURE!)
-            const user = await UserModel.create(username, password);
+            const role = req.body?.role as UserRole | undefined;
+            const userRole: UserRole = validRoles.includes(role as UserRole) ? (role as UserRole) : 'employee';
+            const department = normalizeDepartment(req.body?.department);
+
+            if (userRole !== 'super_admin' && !department) {
+                res.status(400).json({
+                    success: false,
+                    message: 'Department is required for non-super-admin users'
+                } as AuthResponse);
+                return;
+            }
+
+            const user = await UserModel.create(username, password, userRole, userRole === 'super_admin' ? null : department);
 
             // Return user data without password
             const userResponse: UserResponse = {
                 id: user.id,
                 username: user.username,
                 role: user.role,
+                department: user.department,
                 station_id: user.station_id,
                 created_at: user.created_at,
                 updated_at: user.updated_at
@@ -57,7 +86,7 @@ export class AuthController {
             }
 
             const token = jwt.sign(
-                { id: user.id, username: user.username },
+                { id: user.id, username: user.username, role: user.role, department: user.department },
                 jwtSecret,
                 { expiresIn: '24h' }
             );
@@ -124,6 +153,7 @@ export class AuthController {
                 id: user.id,
                 username: user.username,
                 role: user.role,
+                department: user.department,
                 station_id: user.station_id,
                 created_at: user.created_at,
                 updated_at: user.updated_at
@@ -136,7 +166,7 @@ export class AuthController {
             }
 
             const token = jwt.sign(
-                { id: user.id, username: user.username },
+                { id: user.id, username: user.username, role: user.role, department: user.department },
                 jwtSecret,
                 { expiresIn: '24h' }
             );
@@ -182,6 +212,7 @@ export class AuthController {
                 id: user.id,
                 username: user.username,
                 role: user.role,
+                department: user.department,
                 station_id: user.station_id,
                 created_at: user.created_at,
                 updated_at: user.updated_at
@@ -215,7 +246,7 @@ export class AuthController {
     // Create a new user (admin only)
     static async createUser(req: AuthRequest, res: Response): Promise<void> {
         try {
-            const { username, password, role } = req.body;
+            const { username, password, role, department } = req.body;
 
             if (!username || !password) {
                 res.status(400).json({ success: false, message: 'Username and password are required' });
@@ -230,14 +261,28 @@ export class AuthController {
                 return;
             }
 
-            const validRoles = ['admin', 'user', 'ceo', 'investment_user', 'franchise_user'];
-            const userRole = validRoles.includes(role) ? role : 'user';
+            const userRole: UserRole = validRoles.includes(role) ? role : 'employee';
+            const normalizedDepartment = normalizeDepartment(department);
 
-            const user = await UserModel.create(username, password, userRole);
+            if (userRole !== 'super_admin' && !normalizedDepartment) {
+                res.status(400).json({
+                    success: false,
+                    message: 'Department is required for non-super-admin users'
+                });
+                return;
+            }
+
+            const user = await UserModel.create(
+                username,
+                password,
+                userRole,
+                userRole === 'super_admin' ? null : normalizedDepartment
+            );
             const userResponse: UserResponse = {
                 id: user.id,
                 username: user.username,
                 role: user.role,
+                department: user.department,
                 station_id: user.station_id,
                 created_at: user.created_at,
                 updated_at: user.updated_at,

@@ -61,11 +61,17 @@ export const createInvestmentProject = async (req: Request, res: Response): Prom
 // ─── GET ALL ──────────────────────────────────────────────────────────────────
 export const getAllInvestmentProjects = async (req: Request, res: Response): Promise<void> => {
     try {
+        const userRole = (req as any).user?.role;
+        const userDepartment = (req as any).user?.department;
         const { departmentType } = req.query;
-        const query = departmentType
+        const effectiveDepartmentType = userRole === 'super_admin'
+            ? departmentType
+            : userDepartment;
+
+        const query = effectiveDepartmentType
             ? 'SELECT * FROM investment_projects WHERE department_type = $1 ORDER BY created_at DESC'
             : 'SELECT * FROM investment_projects ORDER BY created_at DESC';
-        const params = departmentType ? [departmentType] : [];
+        const params = effectiveDepartmentType ? [effectiveDepartmentType] : [];
         const result = await pool.query(query, params);
         res.status(200).json({ message: 'Projects retrieved', data: result.rows, count: result.rows.length });
     } catch (error: any) {
@@ -76,12 +82,18 @@ export const getAllInvestmentProjects = async (req: Request, res: Response): Pro
 // ─── GET BY STATION ───────────────────────────────────────────────────────────
 export const getInvestmentProjectsByStation = async (req: Request, res: Response): Promise<void> => {
     try {
+        const userRole = (req as any).user?.role;
+        const userDepartment = (req as any).user?.department;
         const { stationCode } = req.params;
         const { departmentType } = req.query;
-        const query = departmentType
+        const effectiveDepartmentType = userRole === 'super_admin'
+            ? departmentType
+            : userDepartment;
+
+        const query = effectiveDepartmentType
             ? 'SELECT * FROM investment_projects WHERE station_code = $1 AND department_type = $2 ORDER BY created_at DESC'
             : 'SELECT * FROM investment_projects WHERE station_code = $1 ORDER BY created_at DESC';
-        const params = departmentType ? [stationCode, departmentType] : [stationCode];
+        const params = effectiveDepartmentType ? [stationCode, effectiveDepartmentType] : [stationCode];
         const result = await pool.query(query, params);
         res.status(200).json({ message: 'Projects retrieved', data: result.rows, count: result.rows.length });
     } catch (error: any) {
@@ -157,9 +169,14 @@ export const deleteInvestmentProject = async (req: Request, res: Response): Prom
 // ─── FEASIBILITY STATS ────────────────────────────────────────────────────────
 export const getFeasibilityStats = async (req: Request, res: Response): Promise<void> => {
     try {
+        const userRole = (req as any).user?.role;
+        const userDepartment = (req as any).user?.department;
         const { departmentType } = req.query;
-        const filter = departmentType ? 'WHERE department_type = $1' : '';
-        const params = departmentType ? [departmentType] : [];
+        const effectiveDepartmentType = userRole === 'super_admin'
+            ? departmentType
+            : userDepartment;
+        const filter = effectiveDepartmentType ? 'WHERE department_type = $1' : '';
+        const params = effectiveDepartmentType ? [effectiveDepartmentType] : [];
         const result = await pool.query(`
             SELECT
                 COUNT(*) AS total,
@@ -189,11 +206,11 @@ export const updateInvestmentProjectReviewStatus = async (req: Request, res: Res
         let query = '';
         let params: any[] = [];
 
-        if (userRole === 'ceo') {
+        if (userRole === 'super_admin') {
             query = `UPDATE investment_projects SET review_status = $1, ceo_comment = $2, updated_by = $3, updated_at = CURRENT_TIMESTAMP WHERE id = $4 RETURNING *`;
             params = [reviewStatus, comment, userId, id];
         } else {
-            // Assume PM/User
+            // Department roles write into PM comment trail
             query = `UPDATE investment_projects SET review_status = $1, pm_comment = $2, updated_by = $3, updated_at = CURRENT_TIMESTAMP WHERE id = $4 RETURNING *`;
             params = [reviewStatus, comment, userId, id];
         }
@@ -245,9 +262,14 @@ export const updateInvestmentProjectReviewStatus = async (req: Request, res: Res
 // ─── CONTRACT STATS ───────────────────────────────────────────────────────────
 export const getContractStats = async (req: Request, res: Response): Promise<void> => {
     try {
+        const userRole = (req as any).user?.role;
+        const userDepartment = (req as any).user?.department;
         const { departmentType } = req.query;
-        const filter = departmentType ? 'WHERE department_type = $1' : '';
-        const params = departmentType ? [departmentType] : [];
+        const effectiveDepartmentType = userRole === 'super_admin'
+            ? departmentType
+            : userDepartment;
+        const filter = effectiveDepartmentType ? 'WHERE department_type = $1' : '';
+        const params = effectiveDepartmentType ? [effectiveDepartmentType] : [];
         const result = await pool.query(`
             SELECT
                 COUNT(*) AS total,

@@ -1,7 +1,9 @@
 import { Request } from 'express';
 
+export type Department = 'investment' | 'franchise';
+
 // User roles
-export type UserRole = 'admin' | 'user' | 'ceo' | 'investment_user' | 'franchise_user';
+export type UserRole = 'super_admin' | 'department_manager' | 'supervisor' | 'employee';
 
 // User interface matching database schema
 export interface User {
@@ -9,6 +11,7 @@ export interface User {
     username: string;
     password: string;
     role: UserRole;
+    department: Department | null;
     station_id: string | null;
     created_at: Date;
     updated_at: Date;
@@ -19,6 +22,7 @@ export interface UserResponse {
     id: string;
     username: string;
     role: UserRole;
+    department: Department | null;
     station_id: string | null;
     created_at: Date;
     updated_at: Date;
@@ -49,6 +53,8 @@ export interface AuthRequest extends Request {
     user?: {
         id: string;
         username: string;
+        role: UserRole;
+        department: Department | null;
     };
 }
 
@@ -56,4 +62,6 @@ export interface AuthRequest extends Request {
 export interface JWTPayload {
     id: string;
     username: string;
+    role: UserRole;
+    department: Department | null;
 }

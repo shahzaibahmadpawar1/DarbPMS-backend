@@ -4,7 +4,7 @@ import {
     getAllAreas,
     getAreasByStation
 } from '../controllers/areas.controller';
-import { authenticateToken } from '../middleware/auth';
+import { authenticateToken, requireCapability, requireStationDepartmentAccess } from '../middleware/auth';
 
 const router = Router();
 
@@ -12,12 +12,12 @@ const router = Router();
 router.use(authenticateToken);
 
 // Create new area entry
-router.post('/', createArea);
+router.post('/', requireCapability('create'), requireStationDepartmentAccess({ bodyField: 'stationCode' }), createArea);
 
 // Get all area entries
-router.get('/', getAllAreas);
+router.get('/', requireCapability('view'), getAllAreas);
 
 // Get area entries by station code
-router.get('/station/:stationCode', getAreasByStation);
+router.get('/station/:stationCode', requireCapability('view'), requireStationDepartmentAccess({ paramField: 'stationCode' }), getAreasByStation);
 
 export default router;

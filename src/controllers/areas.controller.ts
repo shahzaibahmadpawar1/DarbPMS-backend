@@ -71,16 +71,32 @@ export const createArea = async (req: Request, res: Response): Promise<void> => 
     }
 };
 
-export const getAllAreas = async (_req: Request, res: Response): Promise<void> => {
+export const getAllAreas = async (req: Request, res: Response): Promise<void> => {
     try {
-        const result = await pool.query(`
-            SELECT sa.*, 
-            COALESCE(json_agg(cc.*) FILTER (WHERE cc.id IS NOT NULL), '[]') as commercial_components
-            FROM station_areas sa
-            LEFT JOIN commercial_components cc ON sa.id = cc.station_area_id
-            GROUP BY sa.id
-            ORDER BY sa.created_at DESC
-        `);
+        const userRole = (req as any).user?.role;
+        const userDepartment = (req as any).user?.department;
+
+        const query = userRole === 'super_admin'
+            ? `
+                SELECT sa.*, 
+                COALESCE(json_agg(cc.*) FILTER (WHERE cc.id IS NOT NULL), '[]') as commercial_components
+                FROM station_areas sa
+                LEFT JOIN commercial_components cc ON sa.id = cc.station_area_id
+                GROUP BY sa.id
+                ORDER BY sa.created_at DESC
+            `
+            : `
+                SELECT sa.*, 
+                COALESCE(json_agg(cc.*) FILTER (WHERE cc.id IS NOT NULL), '[]') as commercial_components
+                FROM station_areas sa
+                LEFT JOIN commercial_components cc ON sa.id = cc.station_area_id
+                INNER JOIN station_information si ON si.station_code = sa.station_code
+                WHERE (CASE WHEN lower(si.station_type_code) = 'frenchise' THEN 'franchise' ELSE lower(si.station_type_code) END) = $1
+                GROUP BY sa.id
+                ORDER BY sa.created_at DESC
+            `;
+
+        const result = await pool.query(query, userRole === 'super_admin' ? [] : [userDepartment]);
         res.status(200).json({ message: 'Areas retrieved successfully', data: result.rows });
     } catch (error) {
         console.error('Error fetching areas:', error);

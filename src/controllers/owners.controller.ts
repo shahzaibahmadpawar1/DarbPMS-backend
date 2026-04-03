@@ -75,9 +75,19 @@ export const createOwner = async (req: Request, res: Response): Promise<void> =>
     }
 };
 
-export const getAllOwners = async (_req: Request, res: Response): Promise<void> => {
+export const getAllOwners = async (req: Request, res: Response): Promise<void> => {
     try {
-        const result = await pool.query('SELECT * FROM owners ORDER BY created_at DESC');
+        const userRole = (req as any).user?.role;
+        const userDepartment = (req as any).user?.department;
+        const query = userRole === 'super_admin'
+            ? 'SELECT * FROM owners ORDER BY created_at DESC'
+            : `
+                SELECT o.* FROM owners o
+                INNER JOIN station_information si ON si.station_code = o.station_code
+                WHERE (CASE WHEN lower(si.station_type_code) = 'frenchise' THEN 'franchise' ELSE lower(si.station_type_code) END) = $1
+                ORDER BY o.created_at DESC
+            `;
+        const result = await pool.query(query, userRole === 'super_admin' ? [] : [userDepartment]);
         res.status(200).json({ message: 'Owners retrieved successfully', data: result.rows, count: result.rows.length });
     } catch (error: any) {
         console.error('Error fetching owners:', error);

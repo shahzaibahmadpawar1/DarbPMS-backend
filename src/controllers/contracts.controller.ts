@@ -55,9 +55,19 @@ export const createContract = async (req: Request, res: Response): Promise<void>
     }
 };
 
-export const getAllContracts = async (_req: Request, res: Response): Promise<void> => {
+export const getAllContracts = async (req: Request, res: Response): Promise<void> => {
     try {
-        const result = await pool.query('SELECT * FROM contracts ORDER BY created_at DESC');
+        const userRole = (req as any).user?.role;
+        const userDepartment = (req as any).user?.department;
+        const query = userRole === 'super_admin'
+            ? 'SELECT * FROM contracts ORDER BY created_at DESC'
+            : `
+                SELECT c.* FROM contracts c
+                INNER JOIN station_information si ON si.station_code = c.station_code
+                WHERE (CASE WHEN lower(si.station_type_code) = 'frenchise' THEN 'franchise' ELSE lower(si.station_type_code) END) = $1
+                ORDER BY c.created_at DESC
+            `;
+        const result = await pool.query(query, userRole === 'super_admin' ? [] : [userDepartment]);
         res.status(200).json({ message: 'Contracts retrieved successfully', data: result.rows, count: result.rows.length });
     } catch (error: any) {
         console.error('Error fetching contracts:', error);

@@ -1,17 +1,23 @@
 import pool from '../config/database';
-import { User } from '../types';
+import { Department, User, UserRole } from '../types';
 
 export class UserModel {
     // Create a new user
-    static async create(username: string, password: string, role: 'admin' | 'user' | 'ceo' | 'investment_user' | 'franchise_user' = 'user', station_id: string | null = null): Promise<User> {
+    static async create(
+        username: string,
+        password: string,
+        role: UserRole = 'employee',
+        department: Department | null = null,
+        station_id: string | null = null
+    ): Promise<User> {
         const query = `
-      INSERT INTO users (username, password, role, station_id)
-      VALUES ($1, $2, $3, $4)
-      RETURNING id, username, password, role, station_id, created_at, updated_at
+      INSERT INTO users (username, password, role, department, station_id)
+      VALUES ($1, $2, $3, $4, $5)
+      RETURNING id, username, password, role, department, station_id, created_at, updated_at
     `;
 
         try {
-            const result = await pool.query(query, [username, password, role, station_id]);
+            const result = await pool.query(query, [username, password, role, department, station_id]);
             return result.rows[0];
         } catch (error: any) {
             // Handle unique constraint violation
@@ -48,7 +54,7 @@ export class UserModel {
 
     // Get all users (including password and role for admin view)
     static async findAll(): Promise<User[]> {
-        const query = 'SELECT id, username, password, role, station_id, created_at, updated_at FROM users ORDER BY created_at DESC';
+        const query = 'SELECT id, username, password, role, department, station_id, created_at, updated_at FROM users ORDER BY created_at DESC';
 
         try {
             const result = await pool.query(query);

@@ -31,9 +31,20 @@ export const createNozzle = async (req: Request, res: Response): Promise<void> =
     }
 };
 
-export const getAllNozzles = async (_req: Request, res: Response): Promise<void> => {
+export const getAllNozzles = async (req: Request, res: Response): Promise<void> => {
     try {
-        const result = await pool.query('SELECT * FROM nozzles ORDER BY created_at DESC');
+        const userRole = (req as any).user?.role;
+        const userDepartment = (req as any).user?.department;
+        const query = userRole === 'super_admin'
+            ? 'SELECT * FROM nozzles ORDER BY created_at DESC'
+            : `
+                SELECT n.* FROM nozzles n
+                INNER JOIN dispensers d ON d.dispenser_serial_number = n.dispenser_serial_number
+                INNER JOIN station_information si ON si.station_code = d.station_code
+                WHERE (CASE WHEN lower(si.station_type_code) = 'frenchise' THEN 'franchise' ELSE lower(si.station_type_code) END) = $1
+                ORDER BY n.created_at DESC
+            `;
+        const result = await pool.query(query, userRole === 'super_admin' ? [] : [userDepartment]);
         res.status(200).json({ message: 'Nozzles retrieved successfully', data: result.rows, count: result.rows.length });
     } catch (error) {
         console.error('Error fetching nozzles:', error);

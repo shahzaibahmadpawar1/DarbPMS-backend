@@ -182,15 +182,18 @@ app.get('/api/dashboard/stats', authenticateToken, async (_req: Request, res: Re
 app.get('/api/tasks', authenticateToken, async (req: Request, res: Response) => {
     try {
         const userRole = (req as any).user?.role;
+        const userDepartment = (req as any).user?.department;
 
         let query = '';
-        if (userRole === 'ceo') {
-            query = `SELECT * FROM investment_projects WHERE review_status IN ('Validated', 'Approved', 'Rejected') ORDER BY created_at DESC`;
-        } else {
+        let params: any[] = [];
+        if (userRole === 'super_admin') {
             query = `SELECT * FROM investment_projects ORDER BY created_at DESC`;
+        } else {
+            query = `SELECT * FROM investment_projects WHERE department_type = $1 ORDER BY created_at DESC`;
+            params = [userDepartment];
         }
 
-        const result = await pool.query(query);
+        const result = await pool.query(query, params);
         res.status(200).json({ data: result.rows });
     } catch (error: any) {
         console.error('Tasks fetch error:', error);

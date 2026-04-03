@@ -103,14 +103,21 @@ export const createStationInformation = async (req: Request, res: Response): Pro
 };
 
 // Get all station information
-export const getAllStationInformation = async (_req: Request, res: Response): Promise<void> => {
+export const getAllStationInformation = async (req: Request, res: Response): Promise<void> => {
     try {
-        const query = `
-            SELECT * FROM station_information 
-            ORDER BY created_at DESC
-        `;
+        const userRole = (req as any).user?.role;
+        const userDepartment = (req as any).user?.department;
 
-        const result = await pool.query(query);
+        const query = userRole === 'super_admin'
+            ? `SELECT * FROM station_information ORDER BY created_at DESC`
+            : `
+                SELECT * FROM station_information
+                WHERE (CASE WHEN lower(station_type_code) = 'frenchise' THEN 'franchise' ELSE lower(station_type_code) END) = $1
+                ORDER BY created_at DESC
+            `;
+
+        const params = userRole === 'super_admin' ? [] : [userDepartment];
+        const result = await pool.query(query, params);
 
         res.status(200).json({
             message: 'Station information retrieved successfully',
