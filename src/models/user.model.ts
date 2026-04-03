@@ -1,5 +1,13 @@
 import pool from '../config/database';
 import { Department, User, UserRole } from '../types';
+import { normalizeUserRole } from '../utils/roles';
+
+function normalizeUserRow(row: any): User {
+    return {
+        ...row,
+        role: normalizeUserRole(row.role),
+    };
+}
 
 export class UserModel {
     // Create a new user
@@ -18,7 +26,7 @@ export class UserModel {
 
         try {
             const result = await pool.query(query, [username, password, role, department, station_id]);
-            return result.rows[0];
+            return normalizeUserRow(result.rows[0]);
         } catch (error: any) {
             // Handle unique constraint violation
             if (error.code === '23505') {
@@ -34,7 +42,7 @@ export class UserModel {
 
         try {
             const result = await pool.query(query, [username]);
-            return result.rows[0] || null;
+            return result.rows[0] ? normalizeUserRow(result.rows[0]) : null;
         } catch (error) {
             throw error;
         }
@@ -46,7 +54,7 @@ export class UserModel {
 
         try {
             const result = await pool.query(query, [id]);
-            return result.rows[0] || null;
+            return result.rows[0] ? normalizeUserRow(result.rows[0]) : null;
         } catch (error) {
             throw error;
         }
@@ -58,7 +66,7 @@ export class UserModel {
 
         try {
             const result = await pool.query(query);
-            return result.rows;
+            return result.rows.map(normalizeUserRow);
         } catch (error) {
             throw error;
         }

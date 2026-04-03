@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import jwt from 'jsonwebtoken';
 import { UserModel } from '../models/user.model';
 import { RegisterRequest, LoginRequest, AuthResponse, AuthRequest, Department, UserResponse, UserRole } from '../types';
+import { normalizeUserRole } from '../utils/roles';
 
 const validRoles: UserRole[] = ['super_admin', 'department_manager', 'supervisor', 'employee'];
 const validDepartments: Department[] = ['investment', 'franchise'];
@@ -54,8 +55,8 @@ export class AuthController {
             }
 
             // Create user with plain text password (INSECURE!)
-            const role = req.body?.role as UserRole | undefined;
-            const userRole: UserRole = validRoles.includes(role as UserRole) ? (role as UserRole) : 'employee';
+            const role = normalizeUserRole(req.body?.role);
+            const userRole: UserRole = validRoles.includes(role as UserRole) ? role : 'employee';
             const department = normalizeDepartment(req.body?.department);
 
             if (userRole !== 'super_admin' && !department) {

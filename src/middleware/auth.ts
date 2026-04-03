@@ -3,6 +3,7 @@ import jwt from 'jsonwebtoken';
 import { AuthRequest, JWTPayload, UserRole } from '../types';
 import { UserModel } from '../models/user.model';
 import pool from '../config/database';
+import { normalizeUserRole } from '../utils/roles';
 
 const roleRank: Record<UserRole, number> = {
     employee: 1,
@@ -114,7 +115,7 @@ export const authenticateToken = (
         req.user = {
             id: decoded.id,
             username: decoded.username,
-            role: decoded.role,
+            role: normalizeUserRole(decoded.role),
             department: decoded.department
         };
 

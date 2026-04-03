@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
 import pool from '../config/database';
+import { normalizeUserRole } from '../utils/roles';
 
 const ALLOWED_STATION_TYPES = ['operation', 'rent', 'franchise', 'investment', 'ownership'] as const;
 
@@ -105,7 +106,7 @@ export const createStationInformation = async (req: Request, res: Response): Pro
 // Get all station information
 export const getAllStationInformation = async (req: Request, res: Response): Promise<void> => {
     try {
-        const userRole = (req as any).user?.role;
+        const userRole = normalizeUserRole((req as any).user?.role);
         const userDepartment = (req as any).user?.department;
 
         const query = userRole === 'super_admin'
