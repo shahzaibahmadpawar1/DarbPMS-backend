@@ -1,5 +1,7 @@
 import { Request, Response } from 'express';
 import pool from '../config/database';
+import { createWorkflowTaskForProject } from './workflowTasks.controller';
+import { deriveAction, recordWorkflowTransition } from '../utils/workflow';
 
 // ─── CREATE ───────────────────────────────────────────────────────────────────
 export const createInvestmentProject = async (req: Request, res: Response): Promise<void> => {
@@ -194,33 +196,52 @@ export const getFeasibilityStats = async (req: Request, res: Response): Promise<
 export const updateInvestmentProjectReviewStatus = async (req: Request, res: Response): Promise<void> => {
     try {
         const { id } = req.params;
-        const { reviewStatus, comment } = req.body;
+        const { reviewStatus, comment, action } = req.body;
         const userId = (req as any).user?.id;
         const userRole = (req as any).user?.role;
 
-        if (!reviewStatus) {
-            res.status(400).json({ error: 'Review status is required' });
+        const normalizedAction = deriveAction(action || reviewStatus);
+        if (!normalizedAction) {
+            res.status(400).json({ error: 'A valid action is required: Approve, Contract, Documents or Reject' });
             return;
         }
 
-        let query = '';
-        let params: any[] = [];
+        let nextReviewStatus: 'Approved' | 'Rejected' | 'Validated';
+        let workflowPath: 'contract' | 'documents' | null = null;
 
-        if (userRole === 'super_admin') {
-            query = `UPDATE investment_projects SET review_status = $1, ceo_comment = $2, updated_by = $3, updated_at = CURRENT_TIMESTAMP WHERE id = $4 RETURNING *`;
-            params = [reviewStatus, comment, userId, id];
+        const previousResult = await pool.query('SELECT review_status FROM investment_projects WHERE id = $1 LIMIT 1', [id]);
+        const previousStatus = previousResult.rows[0]?.review_status || null;
+
+        if (normalizedAction === 'Approve') {
+            nextReviewStatus = 'Approved';
+        } else if (normalizedAction === 'Reject') {
+            nextReviewStatus = 'Rejected';
         } else {
-            // Department roles write into PM comment trail
-            query = `UPDATE investment_projects SET review_status = $1, pm_comment = $2, updated_by = $3, updated_at = CURRENT_TIMESTAMP WHERE id = $4 RETURNING *`;
-            params = [reviewStatus, comment, userId, id];
+            nextReviewStatus = 'Validated';
+            workflowPath = normalizedAction === 'Contract' ? 'contract' : 'documents';
         }
 
-        const result = await pool.query(query, params);
-        if (!result.rows.length) { res.status(404).json({ error: 'Project not found' }); return; }
+        const commentField = userRole === 'super_admin' ? 'ceo_comment' : 'pm_comment';
+        const updateResult = await pool.query(
+            `UPDATE investment_projects
+             SET review_status = $1,
+                 workflow_path = $2,
+                 ${commentField} = $3,
+                 updated_by = $4,
+                 updated_at = CURRENT_TIMESTAMP
+             WHERE id = $5
+             RETURNING *`,
+            [nextReviewStatus, workflowPath, comment || null, userId, id],
+        );
+
+        if (!updateResult.rows.length) {
+            res.status(404).json({ error: 'Project not found' });
+            return;
+        }
 
         // If approved by CEO, auto-create a station in station_information
-        if (reviewStatus === 'Approved') {
-            const project = result.rows[0];
+        if (nextReviewStatus === 'Approved') {
+            const project = updateResult.rows[0];
             try {
                 await pool.query(`
                     INSERT INTO station_information (
@@ -253,7 +274,29 @@ export const updateInvestmentProjectReviewStatus = async (req: Request, res: Res
             }
         }
 
-        res.status(200).json({ message: 'Project review status updated', data: result.rows[0] });
+        if (workflowPath && userId) {
+            await createWorkflowTaskForProject(id, workflowPath, userId);
+        }
+
+        await recordWorkflowTransition({
+            entityType: 'investment_project',
+            entityId: id,
+            oldState: previousStatus,
+            newState: nextReviewStatus,
+            changedBy: userId,
+            note: comment || `Workflow action: ${normalizedAction}`,
+            metadata: {
+                action: normalizedAction,
+                workflowPath,
+                actorRole: userRole,
+            },
+        });
+
+        res.status(200).json({
+            message: 'Project workflow action applied',
+            data: updateResult.rows[0],
+            action: normalizedAction,
+        });
     } catch (error: any) {
         res.status(500).json({ error: 'Failed to update review status', details: error.message });
     }

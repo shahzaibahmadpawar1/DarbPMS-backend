@@ -1,6 +1,7 @@
 import express, { Request, Response, NextFunction } from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
+import path from 'path';
 import authRoutes from './routes/auth.routes';
 import stationInformationRoutes from './routes/stationInformation.routes';
 import camerasRoutes from './routes/cameras.routes';
@@ -15,9 +16,12 @@ import contractsRoutes from './routes/contracts.routes';
 import commercialLicensesRoutes from './routes/commercialLicenses.routes';
 import governmentLicensesRoutes from './routes/governmentLicenses.routes';
 import investmentProjectsRoutes from './routes/investmentProjects.routes';
+import workflowTasksRoutes from './routes/workflowTasks.routes';
+import fileUploadRoutes from './routes/fileUpload.routes';
 import translationsRoutes from './routes/translations.routes';
 import pool from './config/database';
 import { authenticateToken } from './middleware/auth';
+import { ensureWorkflowSchema } from './utils/workflow';
 
 // Load environment variables
 dotenv.config();
@@ -49,6 +53,7 @@ app.use(cors({
 }));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+app.use('/uploads', express.static(path.resolve(process.cwd(), 'uploads')));
 
 // Request logging middleware
 app.use((req: Request, _res: Response, next: NextFunction) => {
@@ -127,12 +132,23 @@ app.use('/api/contracts', contractsRoutes);
 app.use('/api/commercial-licenses', commercialLicensesRoutes);
 app.use('/api/government-licenses', governmentLicensesRoutes);
 app.use('/api/investment-projects', investmentProjectsRoutes);
+app.use('/api/tasks', workflowTasksRoutes);
+app.use('/api/files', fileUploadRoutes);
 app.use('/api/translate', translationsRoutes);
 
+ensureWorkflowSchema().catch((error) => {
+    console.error('Workflow schema bootstrap failed:', error);
+});
+
 // ── Dashboard stats (authenticated) ──────────────────────────────────────────
-app.get('/api/dashboard/stats', authenticateToken, async (_req: Request, res: Response) => {
+app.get('/api/dashboard/stats', authenticateToken, async (req: Request, res: Response) => {
     try {
-        const [stationsResult, projectsResult, recentResult, stationsListResult] = await Promise.all([
+        const authReq = req as any;
+        const userRole = authReq.user?.role;
+        const userDepartment = authReq.user?.department;
+        const departmentScoped = userRole !== 'super_admin' ? userDepartment : null;
+
+        const [stationsResult, projectsResult, recentResult, stationsListResult, workflowResult] = await Promise.all([
             pool.query(`
                 SELECT
                     COUNT(*) AS total,
@@ -164,6 +180,42 @@ app.get('/api/dashboard/stats', authenticateToken, async (_req: Request, res: Re
                 ORDER BY created_at DESC
                 LIMIT 10
             `),
+            departmentScoped
+                ? pool.query(`
+                    WITH dept_projects AS (
+                        SELECT id, review_status
+                        FROM investment_projects
+                        WHERE department_type = $1
+                    ),
+                    contract_projects AS (
+                        SELECT DISTINCT investment_project_id AS project_id
+                        FROM project_workflow_tasks
+                        WHERE flow_type = 'contract' AND (origin_department = $1 OR target_department = $1)
+                    ),
+                    document_projects AS (
+                        SELECT DISTINCT investment_project_id AS project_id
+                        FROM project_workflow_tasks
+                        WHERE flow_type = 'documents' AND (origin_department = $1 OR target_department = $1)
+                    )
+                    SELECT
+                        (SELECT COUNT(*) FROM dept_projects WHERE review_status = 'Pending Review') AS new_project,
+                        (SELECT COUNT(*) FROM dept_projects WHERE review_status = 'Validated') AS under_review,
+                        (SELECT COUNT(*) FROM contract_projects) AS contracted,
+                        (SELECT COUNT(*) FROM document_projects) AS documented,
+                        (SELECT COUNT(*) FROM dept_projects WHERE review_status = 'Approved') AS approved,
+                        (SELECT COUNT(*) FROM dept_projects WHERE review_status = 'Rejected') AS rejected,
+                        (
+                            SELECT COUNT(DISTINCT project_id)
+                            FROM (
+                                SELECT id AS project_id FROM dept_projects WHERE review_status = 'Approved'
+                                UNION
+                                SELECT project_id FROM contract_projects
+                                UNION
+                                SELECT project_id FROM document_projects
+                            ) x
+                        ) AS total_projects
+                `, [departmentScoped])
+                : Promise.resolve({ rows: [null] }),
         ]);
 
         res.status(200).json({
@@ -171,33 +223,11 @@ app.get('/api/dashboard/stats', authenticateToken, async (_req: Request, res: Re
             projects: projectsResult.rows[0],
             recentActivities: recentResult.rows,
             stationsList: stationsListResult.rows,
+            workflow: workflowResult.rows[0],
         });
     } catch (error: any) {
         console.error('Dashboard stats error:', error);
         res.status(500).json({ error: 'Failed to fetch dashboard stats', details: error.message });
-    }
-});
-
-// ── Tasks / Activity feed (authenticated) ─────────────────────────────────────
-app.get('/api/tasks', authenticateToken, async (req: Request, res: Response) => {
-    try {
-        const userRole = (req as any).user?.role;
-        const userDepartment = (req as any).user?.department;
-
-        let query = '';
-        let params: any[] = [];
-        if (userRole === 'super_admin') {
-            query = `SELECT * FROM investment_projects ORDER BY created_at DESC`;
-        } else {
-            query = `SELECT * FROM investment_projects WHERE department_type = $1 ORDER BY created_at DESC`;
-            params = [userDepartment];
-        }
-
-        const result = await pool.query(query, params);
-        res.status(200).json({ data: result.rows });
-    } catch (error: any) {
-        console.error('Tasks fetch error:', error);
-        res.status(500).json({ error: 'Failed to fetch tasks', details: error.message });
     }
 });
 
