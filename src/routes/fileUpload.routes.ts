@@ -5,7 +5,10 @@ import fs from 'fs';
 import { authenticateToken } from '../middleware/auth';
 import { uploadWorkflowFile } from '../controllers/fileUpload.controller';
 
-const uploadDir = path.resolve(process.cwd(), 'uploads');
+const uploadDir = process.env.VERCEL
+    ? path.join('/tmp', 'uploads')
+    : path.resolve(process.cwd(), 'uploads');
+
 if (!fs.existsSync(uploadDir)) {
     fs.mkdirSync(uploadDir, { recursive: true });
 }

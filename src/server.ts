@@ -28,6 +28,9 @@ dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 5000;
+const uploadsDir = process.env.VERCEL
+    ? path.join('/tmp', 'uploads')
+    : path.resolve(process.cwd(), 'uploads');
 
 // Middleware
 const allowedOrigins = [
@@ -53,7 +56,7 @@ app.use(cors({
 app.options('*', cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
-app.use('/uploads', express.static(path.resolve(process.cwd(), 'uploads')));
+app.use('/uploads', express.static(uploadsDir));
 
 // Request logging middleware
 app.use((req: Request, _res: Response, next: NextFunction) => {
