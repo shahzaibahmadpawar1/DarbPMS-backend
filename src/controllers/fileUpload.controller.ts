@@ -2,7 +2,7 @@ import { Response } from 'express';
 import { AuthRequest } from '../types';
 import path from 'path';
 import { randomUUID } from 'crypto';
-import { getSupabaseAdmin, SUPABASE_BUCKET_NAME } from '../config/supabase';
+import { ensureSupabaseBucketExists, getSupabaseAdmin, SUPABASE_BUCKET_NAME } from '../config/supabase';
 
 const sanitizeBaseName = (name: string): string => {
     const extension = path.extname(name);
@@ -18,6 +18,7 @@ export const uploadWorkflowFile = async (req: AuthRequest, res: Response): Promi
             return;
         }
 
+        await ensureSupabaseBucketExists();
         const supabaseAdmin = getSupabaseAdmin();
 
         const extension = path.extname(file.originalname || '').toLowerCase();

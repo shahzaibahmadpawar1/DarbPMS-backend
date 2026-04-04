@@ -112,6 +112,7 @@ export const validateSupabaseStorageConfig = (): void => {
 };
 
 let supabaseAdminInstance: ReturnType<typeof createClient> | null = null;
+let bucketEnsured = false;
 
 export const getSupabaseAdmin = (): ReturnType<typeof createClient> => {
     if (!supabaseAdminInstance) {
@@ -128,4 +129,33 @@ export const getSupabaseAdmin = (): ReturnType<typeof createClient> => {
         );
     }
     return supabaseAdminInstance;
+};
+
+export const ensureSupabaseBucketExists = async (): Promise<void> => {
+    if (bucketEnsured) {
+        return;
+    }
+
+    const client = getSupabaseAdmin();
+    const { data: buckets, error: listError } = await client.storage.listBuckets();
+
+    if (listError) {
+        throw new Error(`Failed to list buckets: ${listError.message}`);
+    }
+
+    const exists = (buckets || []).some((bucket) => bucket.name === SUPABASE_BUCKET_NAME || bucket.id === SUPABASE_BUCKET_NAME);
+    if (exists) {
+        bucketEnsured = true;
+        return;
+    }
+
+    const { error: createError } = await client.storage.createBucket(SUPABASE_BUCKET_NAME, {
+        public: true,
+    });
+
+    if (createError) {
+        throw new Error(`Bucket ${SUPABASE_BUCKET_NAME} not found and could not be created: ${createError.message}`);
+    }
+
+    bucketEnsured = true;
 };
