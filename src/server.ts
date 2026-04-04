@@ -1,6 +1,7 @@
 import express, { Request, Response, NextFunction } from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
+import { CorsOptions } from 'cors';
 import authRoutes from './routes/auth.routes';
 import stationInformationRoutes from './routes/stationInformation.routes';
 import camerasRoutes from './routes/cameras.routes';
@@ -30,27 +31,35 @@ const app = express();
 const PORT = process.env.PORT || 5000;
 
 // Middleware
+const extraOrigins = (process.env.CORS_ORIGIN || '')
+    .split(',')
+    .map((origin) => origin.trim())
+    .filter(Boolean);
+
 const allowedOrigins = [
     'http://localhost:5173',
     'http://localhost:3000',
     'https://stg.pms.darbstations.com.sa',
     'https://pms.darbstations.com.sa',
-    process.env.CORS_ORIGIN
-].filter(Boolean) as string[];
+    ...extraOrigins,
+];
 
-app.use(cors({
+const corsOptions: CorsOptions = {
     origin: (origin, callback) => {
         if (!origin || allowedOrigins.includes(origin)) {
             callback(null, true);
         } else {
+            console.log(`CORS blocked for origin: ${origin}`);
             callback(new Error('Not allowed by CORS'));
         }
     },
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization']
-}));
-app.options('*', cors());
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept'],
+};
+
+app.use(cors(corsOptions));
+app.options('*', cors(corsOptions));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
