@@ -1,13 +1,5 @@
 import { createClient } from '@supabase/supabase-js';
 
-const requiredEnv = (name: string): string => {
-    const value = process.env[name];
-    if (!value) {
-        throw new Error(`${name} is required for Supabase storage configuration`);
-    }
-    return value;
-};
-
 const getSupabaseKey = (): string => {
     const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
     if (serviceRoleKey) {
@@ -20,6 +12,51 @@ const getSupabaseKey = (): string => {
     }
 
     throw new Error('SUPABASE_SERVICE_ROLE_KEY or SUPABASE_ANON_KEY is required for Supabase storage configuration');
+};
+
+const resolveSupabaseUrl = (): string => {
+    const explicit = process.env.SUPABASE_URL;
+    if (explicit) {
+        return explicit;
+    }
+
+    const dbHost = process.env.DB_HOST || '';
+    const dbUrl = process.env.DATABASE_URL || '';
+
+    const extractRef = (host: string): string | null => {
+        const trimmed = host.trim();
+        if (!trimmed) return null;
+
+        const normalized = trimmed.replace(/^https?:\/\//i, '').replace(/:\d+$/, '');
+        const byDbSubdomain = normalized.match(/^db\.([a-z0-9]+)\.supabase\.co$/i);
+        if (byDbSubdomain?.[1]) {
+            return byDbSubdomain[1].toLowerCase();
+        }
+
+        const firstLabel = normalized.split('.')[0]?.toLowerCase();
+        if (/^[a-z0-9]{12,}$/.test(firstLabel || '')) {
+            return firstLabel || null;
+        }
+
+        return null;
+    };
+
+    const parseHostFromDbUrl = (): string => {
+        if (!dbUrl) return '';
+        try {
+            const parsed = new URL(dbUrl);
+            return parsed.hostname || '';
+        } catch {
+            return '';
+        }
+    };
+
+    const ref = extractRef(dbHost) || extractRef(parseHostFromDbUrl());
+    if (ref) {
+        return `https://${ref}.supabase.co`;
+    }
+
+    throw new Error('SUPABASE_URL is required for Supabase storage configuration');
 };
 
 export const SUPABASE_BUCKET_NAME = process.env.SUPABASE_BUCKET_NAME || 'pms';
@@ -70,7 +107,7 @@ export const getMaxFileSizeMb = (): number => {
 };
 
 export const validateSupabaseStorageConfig = (): void => {
-    requiredEnv('SUPABASE_URL');
+    resolveSupabaseUrl();
     getSupabaseKey();
 };
 
@@ -80,7 +117,7 @@ export const getSupabaseAdmin = (): ReturnType<typeof createClient> => {
     if (!supabaseAdminInstance) {
         validateSupabaseStorageConfig();
         supabaseAdminInstance = createClient(
-            requiredEnv('SUPABASE_URL'),
+            resolveSupabaseUrl(),
             getSupabaseKey(),
             {
                 auth: {
