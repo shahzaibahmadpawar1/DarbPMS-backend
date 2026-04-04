@@ -82,12 +82,18 @@ export const getWorkflowTasks = async (req: AuthRequest, res: Response): Promise
                 return;
             }
 
-            query += `
-                WHERE t.origin_department = $1
-                   OR t.target_department = $1
-                   OR t.assigned_to = $2
-            `;
-            params.push(department, userId);
+            if (userRole === 'department_manager') {
+                query += `
+                    WHERE t.origin_department = $1
+                       OR t.target_department = $1
+                       OR t.assigned_by = $2
+                `;
+                params.push(department, userId);
+            } else {
+                // Employees/supervisors should only see tasks explicitly assigned to them.
+                query += ' WHERE t.assigned_to = $1';
+                params.push(userId);
+            }
         }
 
         query += ' ORDER BY t.created_at DESC';
