@@ -11,6 +11,8 @@ const normalizeDepartment = (value: unknown): 'investment' | 'franchise' | null 
     return null;
 };
 
+const isValidHttpUrl = (value: string): boolean => /^https?:\/\//i.test(value.trim());
+
 const upsertStationFromProject = async (projectId: string, userId: string): Promise<void> => {
     const projectResult = await pool.query('SELECT * FROM investment_projects WHERE id = $1 LIMIT 1', [projectId]);
     if (!projectResult.rows.length) {
@@ -230,6 +232,11 @@ export const addManagerAttachment = async (req: AuthRequest, res: Response): Pro
             return;
         }
 
+        if (!isValidHttpUrl(attachmentUrl)) {
+            res.status(400).json({ error: 'attachmentUrl must be a valid http/https URL' });
+            return;
+        }
+
         const result = await pool.query(`
             UPDATE project_workflow_tasks
             SET manager_attachment_url = $1,
@@ -264,8 +271,9 @@ export const submitEmployeeAttachment = async (req: AuthRequest, res: Response):
             return;
         }
 
-        if (!attachmentUrl) {
-            res.status(400).json({ error: 'attachmentUrl is required' });
+        const normalizedAttachmentUrl = String(attachmentUrl || '').trim();
+        if (normalizedAttachmentUrl && !isValidHttpUrl(normalizedAttachmentUrl)) {
+            res.status(400).json({ error: 'attachmentUrl must be a valid http/https URL' });
             return;
         }
 
@@ -283,6 +291,15 @@ export const submitEmployeeAttachment = async (req: AuthRequest, res: Response):
             return;
         }
 
+        const resolvedEmployeeAttachment = normalizedAttachmentUrl || task.employee_attachment_url;
+        const hasAtLeastOneAttachment = Boolean(task.manager_attachment_url || resolvedEmployeeAttachment);
+        if (!hasAtLeastOneAttachment) {
+            res.status(400).json({
+                error: 'At least one attachment is required. Upload manager or employee attachment before submitting.',
+            });
+            return;
+        }
+
         const result = await pool.query(`
             UPDATE project_workflow_tasks
             SET employee_attachment_url = $1,
@@ -291,7 +308,7 @@ export const submitEmployeeAttachment = async (req: AuthRequest, res: Response):
                 updated_at = CURRENT_TIMESTAMP
             WHERE id = $3
             RETURNING *
-        `, [attachmentUrl, note || null, id]);
+        `, [resolvedEmployeeAttachment, note || null, id]);
 
         await recordWorkflowTransition({
             entityType: 'workflow_task',
@@ -301,7 +318,8 @@ export const submitEmployeeAttachment = async (req: AuthRequest, res: Response):
             changedBy: userId,
             note: note || 'Employee submitted attachment',
             metadata: {
-                attachmentUrl,
+                attachmentUrl: resolvedEmployeeAttachment,
+                usedManagerAttachmentOnly: !normalizedAttachmentUrl && Boolean(task.manager_attachment_url),
             },
         });
 
@@ -338,6 +356,13 @@ export const reviewWorkflowTask = async (req: AuthRequest, res: Response): Promi
         }
 
         const task = taskLookup.rows[0];
+        if (!task.manager_attachment_url && !task.employee_attachment_url) {
+            res.status(400).json({
+                error: 'Review cannot proceed without an attachment. At least one manager or employee file is required.',
+            });
+            return;
+        }
+
         const oldTaskState = task.status;
         const taskStatus = normalizedDecision as 'approved' | 'rejected';
 

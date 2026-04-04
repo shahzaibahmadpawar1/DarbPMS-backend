@@ -1,7 +1,6 @@
 import express, { Request, Response, NextFunction } from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
-import path from 'path';
 import authRoutes from './routes/auth.routes';
 import stationInformationRoutes from './routes/stationInformation.routes';
 import camerasRoutes from './routes/cameras.routes';
@@ -22,15 +21,13 @@ import translationsRoutes from './routes/translations.routes';
 import pool from './config/database';
 import { authenticateToken } from './middleware/auth';
 import { ensureWorkflowSchema } from './utils/workflow';
+import { validateSupabaseStorageConfig } from './config/supabase';
 
 // Load environment variables
 dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 5000;
-const uploadsDir = process.env.VERCEL
-    ? path.join('/tmp', 'uploads')
-    : path.resolve(process.cwd(), 'uploads');
 
 // Middleware
 const allowedOrigins = [
@@ -56,7 +53,6 @@ app.use(cors({
 app.options('*', cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
-app.use('/uploads', express.static(uploadsDir));
 
 // Request logging middleware
 app.use((req: Request, _res: Response, next: NextFunction) => {
@@ -142,6 +138,12 @@ app.use('/api/translate', translationsRoutes);
 ensureWorkflowSchema().catch((error) => {
     console.error('Workflow schema bootstrap failed:', error);
 });
+
+try {
+    validateSupabaseStorageConfig();
+} catch (error) {
+    console.error('Supabase storage bootstrap failed:', error);
+}
 
 // ── Dashboard stats (authenticated) ──────────────────────────────────────────
 app.get('/api/dashboard/stats', authenticateToken, async (req: Request, res: Response) => {

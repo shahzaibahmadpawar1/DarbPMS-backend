@@ -1,31 +1,23 @@
 import { Router } from 'express';
 import multer from 'multer';
-import path from 'path';
-import fs from 'fs';
 import { authenticateToken } from '../middleware/auth';
 import { uploadWorkflowFile } from '../controllers/fileUpload.controller';
+import { getAllowedMimeTypes, getMaxFileSizeMb } from '../config/supabase';
 
-const uploadDir = process.env.VERCEL
-    ? path.join('/tmp', 'uploads')
-    : path.resolve(process.cwd(), 'uploads');
+const allowedMimeTypes = new Set(getAllowedMimeTypes());
+const maxFileSizeMb = getMaxFileSizeMb();
 
-if (!fs.existsSync(uploadDir)) {
-    fs.mkdirSync(uploadDir, { recursive: true });
-}
-
-const storage = multer.diskStorage({
-    destination: (_req, _file, cb) => {
-        cb(null, uploadDir);
-    },
-    filename: (_req, file, cb) => {
-        const extension = path.extname(file.originalname);
-        const baseName = path.basename(file.originalname, extension).replace(/[^a-zA-Z0-9-_]/g, '_').slice(0, 50);
-        const uniquePart = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-        cb(null, `${baseName}-${uniquePart}${extension}`);
+const upload = multer({
+    storage: multer.memoryStorage(),
+    limits: { fileSize: maxFileSizeMb * 1024 * 1024 },
+    fileFilter: (_req, file, cb) => {
+        if (!allowedMimeTypes.has(file.mimetype.toLowerCase())) {
+            cb(new Error(`Unsupported file type: ${file.mimetype}`));
+            return;
+        }
+        cb(null, true);
     },
 });
-
-const upload = multer({ storage, limits: { fileSize: 25 * 1024 * 1024 } });
 
 const router = Router();
 router.use(authenticateToken);
