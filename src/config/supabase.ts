@@ -33,6 +33,12 @@ export const getAllowedMimeTypes = (): string[] => {
             'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
             'image/png',
             'image/jpeg',
+            'application/acad',
+            'application/x-acad',
+            'application/autocad_dwg',
+            'image/vnd.dwg',
+            'application/dwg',
+            'application/x-dwg',
         ];
     }
 
@@ -40,6 +46,19 @@ export const getAllowedMimeTypes = (): string[] => {
         .split(',')
         .map((value) => value.trim().toLowerCase())
         .filter(Boolean);
+};
+
+export const getAllowedFileExtensions = (): string[] => {
+    const configured = process.env.ALLOWED_FILE_EXTENSIONS;
+    if (!configured) {
+        return ['.pdf', '.doc', '.docx', '.jpg', '.jpeg', '.png', '.dwg'];
+    }
+
+    return configured
+        .split(',')
+        .map((value) => value.trim().toLowerCase())
+        .filter(Boolean)
+        .map((value) => (value.startsWith('.') ? value : `.${value}`));
 };
 
 export const getMaxFileSizeMb = (): number => {

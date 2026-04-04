@@ -3,6 +3,30 @@ import pool from '../config/database';
 import { createWorkflowTaskForProject } from './workflowTasks.controller';
 import { deriveAction, recordWorkflowTransition } from '../utils/workflow';
 
+const ALLOWED_CONTRACT_TYPES = new Set(['Operation Station', 'Lease Stations', 'Investment', 'Franchise Station']);
+
+const normalizeContractType = (value: unknown): string | null => {
+    const raw = String(value || '').trim();
+    if (!raw) return null;
+
+    if (ALLOWED_CONTRACT_TYPES.has(raw)) {
+        return raw;
+    }
+
+    const lowered = raw.toLowerCase();
+    if (lowered === 'operation station') return 'Operation Station';
+    if (lowered === 'lease stations' || lowered === 'lease station') return 'Lease Stations';
+    if (lowered === 'investment') return 'Investment';
+    if (lowered === 'franchise station' || lowered === 'frenchise station') return 'Franchise Station';
+
+    // Known mismatches from UI/workflow statuses should not be written to contract_type.
+    if (lowered === 'need_contract' || lowered === 'contracted') {
+        return null;
+    }
+
+    return null;
+};
+
 // ─── CREATE ───────────────────────────────────────────────────────────────────
 export const createInvestmentProject = async (req: Request, res: Response): Promise<void> => {
     try {
@@ -25,6 +49,8 @@ export const createInvestmentProject = async (req: Request, res: Response): Prom
             return;
         }
 
+        const normalizedContractType = normalizeContractType(contractType);
+
         const userId = (req as any).user?.id;
         const result = await pool.query(`
             INSERT INTO investment_projects (
@@ -44,7 +70,7 @@ export const createInvestmentProject = async (req: Request, res: Response): Prom
             ) RETURNING *`,
             [
                 departmentType, requestType, projectName, projectCode, city, district, area || 0,
-                projectStatus, contractType, googleLocation, priorityLevel, orderDate || null, requestSender,
+                projectStatus, normalizedContractType, googleLocation, priorityLevel, orderDate || null, requestSender,
                 superMarket || 0, fuelStation || 0, kiosks || 0, retailShop || 0, driveThrough || 0,
                 superMarketArea || 0, fuelStationArea || 0, kiosksArea || 0, retailShopArea || 0, driveThroughArea || 0,
                 ownerName, ownerContactNo, idNo, nationalAddress, email, ownerType || 'individual',
@@ -146,10 +172,18 @@ export const updateInvestmentProject = async (req: Request, res: Response): Prom
         };
         const fields = Object.entries(req.body).filter(([_, v]) => v !== undefined);
         if (!fields.length) { res.status(400).json({ error: 'No fields to update' }); return; }
-        const setClauses = fields.map(([k, _], i) => `${fieldMap[k] || k} = $${i + 1}`).join(', ');
+
+        const normalizedFields = fields.map(([key, value]) => {
+            if (key === 'contractType' || key === 'contract_type') {
+                return [key, normalizeContractType(value)] as const;
+            }
+            return [key, value] as const;
+        });
+
+        const setClauses = normalizedFields.map(([k, _], i) => `${fieldMap[k] || k} = $${i + 1}`).join(', ');
         const result = await pool.query(
-            `UPDATE investment_projects SET ${setClauses}, updated_by = $${fields.length + 1}, updated_at = CURRENT_TIMESTAMP WHERE id = $${fields.length + 2} RETURNING *`,
-            [...fields.map(([_, v]) => v), userId, id]);
+            `UPDATE investment_projects SET ${setClauses}, updated_by = $${normalizedFields.length + 1}, updated_at = CURRENT_TIMESTAMP WHERE id = $${normalizedFields.length + 2} RETURNING *`,
+            [...normalizedFields.map(([_, v]) => v), userId, id]);
         if (!result.rows.length) { res.status(404).json({ error: 'Project not found' }); return; }
         res.status(200).json({ message: 'Project updated', data: result.rows[0] });
     } catch (error: any) {
