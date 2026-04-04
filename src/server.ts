@@ -22,6 +22,7 @@ import translationsRoutes from './routes/translations.routes';
 import pool from './config/database';
 import { authenticateToken } from './middleware/auth';
 import { ensureWorkflowSchema } from './utils/workflow';
+import { ensureSupabaseBucketExists } from './config/supabase';
 
 // Load environment variables
 dotenv.config();
@@ -145,6 +146,10 @@ app.use('/api/translate', translationsRoutes);
 
 ensureWorkflowSchema().catch((error) => {
     console.error('Workflow schema bootstrap failed:', error);
+});
+
+ensureSupabaseBucketExists().catch((error) => {
+    console.error('Supabase bucket bootstrap failed:', error);
 });
 
 // ── Dashboard stats (authenticated) ──────────────────────────────────────────

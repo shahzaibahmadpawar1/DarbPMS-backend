@@ -143,8 +143,18 @@ export const ensureSupabaseBucketExists = async (): Promise<void> => {
         throw new Error(`Failed to list buckets: ${listError.message}`);
     }
 
-    const exists = (buckets || []).some((bucket) => bucket.name === SUPABASE_BUCKET_NAME || bucket.id === SUPABASE_BUCKET_NAME);
-    if (exists) {
+    const existingBucket = (buckets || []).find((bucket) => bucket.name === SUPABASE_BUCKET_NAME || bucket.id === SUPABASE_BUCKET_NAME);
+    if (existingBucket) {
+        if (!existingBucket.public) {
+            const { error: updateError } = await client.storage.updateBucket(existingBucket.id, {
+                public: true,
+            });
+
+            if (updateError) {
+                throw new Error(`Bucket ${SUPABASE_BUCKET_NAME} exists but could not be made public: ${updateError.message}`);
+            }
+        }
+
         bucketEnsured = true;
         return;
     }
