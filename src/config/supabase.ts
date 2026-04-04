@@ -55,15 +55,21 @@ export const validateSupabaseStorageConfig = (): void => {
     getSupabaseKey();
 };
 
-validateSupabaseStorageConfig();
+let supabaseAdminInstance: ReturnType<typeof createClient> | null = null;
 
-export const supabaseAdmin = createClient(
-    requiredEnv('SUPABASE_URL'),
-    getSupabaseKey(),
-    {
-        auth: {
-            persistSession: false,
-            autoRefreshToken: false,
-        },
-    },
-);
+export const getSupabaseAdmin = (): ReturnType<typeof createClient> => {
+    if (!supabaseAdminInstance) {
+        validateSupabaseStorageConfig();
+        supabaseAdminInstance = createClient(
+            requiredEnv('SUPABASE_URL'),
+            getSupabaseKey(),
+            {
+                auth: {
+                    persistSession: false,
+                    autoRefreshToken: false,
+                },
+            },
+        );
+    }
+    return supabaseAdminInstance;
+};
