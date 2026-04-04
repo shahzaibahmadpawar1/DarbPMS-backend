@@ -11,6 +11,16 @@ const normalizeDepartment = (value: unknown): 'investment' | 'franchise' | null 
     return null;
 };
 
+const normalizeStationType = (value: unknown): 'investment' | 'franchise' | 'operation' | 'rent' | 'ownership' => {
+    const normalized = String(value || '').trim().toLowerCase();
+    if (normalized === 'frenchise') return 'franchise';
+    if (normalized === 'franchise') return 'franchise';
+    if (normalized === 'operation') return 'operation';
+    if (normalized === 'rent') return 'rent';
+    if (normalized === 'ownership') return 'ownership';
+    return 'investment';
+};
+
 const isValidHttpUrl = (value: string): boolean => /^https?:\/\//i.test(value.trim());
 
 const upsertStationFromProject = async (projectId: string, userId: string): Promise<void> => {
@@ -20,6 +30,13 @@ const upsertStationFromProject = async (projectId: string, userId: string): Prom
     }
 
     const project = projectResult.rows[0];
+    const stationCode = String(project.project_code || '').trim();
+    const stationName = String(project.project_name || '').trim();
+
+    if (!stationCode || !stationName) {
+        throw new Error('Station creation failed: project code and project name are required');
+    }
+
     await pool.query(`
         INSERT INTO station_information (
             station_code, station_name, city, district,
@@ -36,12 +53,12 @@ const upsertStationFromProject = async (projectId: string, userId: string): Prom
             updated_by = EXCLUDED.updated_by,
             updated_at = CURRENT_TIMESTAMP
     `, [
-        project.project_code,
-        project.project_name,
+        stationCode,
+        stationName,
         project.city,
         project.district,
         project.google_location,
-        project.department_type?.toUpperCase() || 'INVESTMENT',
+        normalizeStationType(project.department_type),
         project.project_status || 'Active',
         userId,
     ]);
@@ -84,11 +101,12 @@ export const getWorkflowTasks = async (req: AuthRequest, res: Response): Promise
                 return;
             }
 
-            if (userRole === 'department_manager') {
+            if (userRole === 'department_manager' || userRole === 'supervisor') {
                 query += `
                     WHERE t.origin_department = $1
                        OR t.target_department = $1
                        OR t.assigned_by = $2
+                       OR t.assigned_to = $2
                 `;
                 params.push(department, userId);
             } else {
@@ -111,6 +129,7 @@ export const getAssignableUsers = async (req: AuthRequest, res: Response): Promi
     try {
         const userRole = req.user?.role;
         const userDepartment = req.user?.department;
+        const targetDepartment = normalizeDepartment(req.query?.targetDepartment);
 
         if (!userRole) {
             res.status(401).json({ error: 'Unauthorized' });
@@ -131,8 +150,11 @@ export const getAssignableUsers = async (req: AuthRequest, res: Response): Promi
                 return;
             }
 
-            query += ' AND (department = $1 OR department IN (\'investment\', \'franchise\'))';
+            query += ' AND department = $1';
             params.push(department);
+        } else if (targetDepartment) {
+            query += ' AND department = $1';
+            params.push(targetDepartment);
         }
 
         query += ' ORDER BY username';
@@ -157,8 +179,8 @@ export const assignWorkflowTask = async (req: AuthRequest, res: Response): Promi
             return;
         }
 
-        if (!(actorRole === 'department_manager' || actorRole === 'super_admin')) {
-            res.status(403).json({ error: 'Only department managers or super admin can assign tasks' });
+        if (!(actorRole === 'department_manager' || actorRole === 'super_admin' || actorRole === 'supervisor')) {
+            res.status(403).json({ error: 'Only department managers, supervisors, or super admin can assign tasks' });
             return;
         }
 
@@ -179,6 +201,18 @@ export const assignWorkflowTask = async (req: AuthRequest, res: Response): Promi
             return;
         }
 
+        const taskLookup = await pool.query('SELECT status, assigned_to FROM project_workflow_tasks WHERE id = $1 LIMIT 1', [id]);
+        if (!taskLookup.rows.length) {
+            res.status(404).json({ error: 'Task not found' });
+            return;
+        }
+
+        const task = taskLookup.rows[0];
+        if (task.status !== 'manager_queue' || task.assigned_to) {
+            res.status(409).json({ error: 'Task is already assigned and cannot be reassigned' });
+            return;
+        }
+
         const result = await pool.query(`
             UPDATE project_workflow_tasks
             SET assigned_to = $1,
@@ -187,11 +221,13 @@ export const assignWorkflowTask = async (req: AuthRequest, res: Response): Promi
                 status = 'assigned',
                 updated_at = CURRENT_TIMESTAMP
             WHERE id = $4
+              AND status = 'manager_queue'
+              AND assigned_to IS NULL
             RETURNING *
         `, [assignedToUserId, actorId, resolvedTargetDepartment, id]);
 
         if (!result.rows.length) {
-            res.status(404).json({ error: 'Task not found' });
+            res.status(409).json({ error: 'Task is already assigned and cannot be reassigned' });
             return;
         }
 
@@ -461,7 +497,7 @@ export const createWorkflowTaskForProject = async (
         `${titlePrefix} - ${project.project_name}`,
         `${titlePrefix} created for project ${project.project_code}.`,
         flowType,
-        project.department_type,
+        normalizeDepartment(project.department_type) || 'investment',
         actorId,
     ]);
 

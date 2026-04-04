@@ -27,6 +27,51 @@ const normalizeContractType = (value: unknown): string | null => {
     return null;
 };
 
+const normalizeStationType = (value: unknown): 'investment' | 'franchise' | 'operation' | 'rent' | 'ownership' => {
+    const normalized = String(value || '').trim().toLowerCase();
+    if (normalized === 'frenchise') return 'franchise';
+    if (normalized === 'franchise') return 'franchise';
+    if (normalized === 'operation') return 'operation';
+    if (normalized === 'rent') return 'rent';
+    if (normalized === 'ownership') return 'ownership';
+    return 'investment';
+};
+
+const upsertStationFromProject = async (project: any, userId: string): Promise<void> => {
+    const stationCode = String(project.project_code || '').trim();
+    const stationName = String(project.project_name || '').trim();
+
+    if (!stationCode || !stationName) {
+        throw new Error('Station sync failed: project code and project name are required');
+    }
+
+    await pool.query(`
+        INSERT INTO station_information (
+            station_code, station_name, city, district,
+            geographic_location, station_type_code, station_status_code,
+            created_by, updated_by
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8)
+        ON CONFLICT (station_code) DO UPDATE SET
+            station_name = EXCLUDED.station_name,
+            city = EXCLUDED.city,
+            district = EXCLUDED.district,
+            geographic_location = EXCLUDED.geographic_location,
+            station_type_code = EXCLUDED.station_type_code,
+            station_status_code = EXCLUDED.station_status_code,
+            updated_by = EXCLUDED.updated_by,
+            updated_at = CURRENT_TIMESTAMP
+    `, [
+        stationCode,
+        stationName,
+        project.city,
+        project.district,
+        project.google_location,
+        normalizeStationType(project.department_type),
+        project.project_status || 'Active',
+        userId,
+    ]);
+};
+
 // ─── CREATE ───────────────────────────────────────────────────────────────────
 export const createInvestmentProject = async (req: Request, res: Response): Promise<void> => {
     try {
@@ -276,36 +321,7 @@ export const updateInvestmentProjectReviewStatus = async (req: Request, res: Res
         // If approved by CEO, auto-create a station in station_information
         if (nextReviewStatus === 'Approved') {
             const project = updateResult.rows[0];
-            try {
-                await pool.query(`
-                    INSERT INTO station_information (
-                        station_code, station_name, city, district,
-                        geographic_location, station_type_code, station_status_code,
-                        created_by, updated_by
-                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8)
-                    ON CONFLICT (station_code) DO UPDATE SET
-                        station_name = EXCLUDED.station_name,
-                        city = EXCLUDED.city,
-                        district = EXCLUDED.district,
-                        geographic_location = EXCLUDED.geographic_location,
-                        station_type_code = EXCLUDED.station_type_code,
-                        station_status_code = EXCLUDED.station_status_code,
-                        updated_by = EXCLUDED.updated_by,
-                        updated_at = CURRENT_TIMESTAMP
-                `, [
-                    project.project_code,
-                    project.project_name,
-                    project.city,
-                    project.district,
-                    project.google_location,
-                    project.department_type?.toUpperCase() || 'INVESTMENT',
-                    project.project_status || 'Active',
-                    userId,
-                ]);
-            } catch (stationErr: any) {
-                console.error('Warning: Failed to auto-create station on approval:', stationErr.message);
-                // Don't fail the whole request — just log and continue
-            }
+            await upsertStationFromProject(project, userId);
         }
 
         if (workflowPath && userId) {
