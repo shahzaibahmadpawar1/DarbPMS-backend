@@ -159,34 +159,46 @@ const buildDashboardStationQuery = (bucket: ReturnType<typeof normalizeDashboard
             WITH bucket_projects AS (
                 SELECT
                     p.id AS project_id,
-                    p.station_code,
+                    p.project_code,
+                    p.project_name,
+                    p.city AS project_city,
                     p.department_type,
+                    p.project_status,
                     p.review_status,
-                    p.created_at AS project_created_at
+                    p.created_at AS project_created_at,
+                    COALESCE(NULLIF(p.station_code, ''), p.project_code) AS join_code
                 FROM investment_projects p
                 ${filterClause}
-                AND NULLIF(p.station_code, '') IS NOT NULL
                 ${bucketClause}
             )
-            SELECT DISTINCT ON (s.station_code)
-                s.id::text AS id,
-                s.station_code,
-                s.station_name,
-                s.city,
-                COALESCE(NULLIF(s.station_type_code, ''), bp.department_type) AS station_type_code,
+            SELECT DISTINCT ON (display_code)
+                COALESCE(s.station_code, bp.project_code) AS display_code,
+                COALESCE(s.id::text, bp.project_id::text) AS id,
+                COALESCE(s.station_code, bp.project_code) AS station_code,
+                COALESCE(s.station_name, bp.project_name) AS station_name,
+                COALESCE(s.city, bp.project_city) AS city,
+                COALESCE(
+                    NULLIF(s.station_type_code, ''),
+                    CASE
+                        WHEN lower(bp.department_type) = 'frenchise' THEN 'franchise'
+                        ELSE lower(bp.department_type)
+                    END,
+                    bp.department_type
+                ) AS station_type_code,
                 CASE
                     WHEN '${bucket}' = 'contracted' THEN 'Contracted'
                     WHEN '${bucket}' = 'documented' THEN 'Documented'
                     WHEN '${bucket}' = 'validated' THEN 'Validated'
                     WHEN '${bucket}' = 'approved' THEN 'Approved'
                     WHEN '${bucket}' = 'pending-review' OR '${bucket}' = 'new-projects' THEN 'Pending Review'
-                    ELSE COALESCE(s.station_status_code, bp.review_status, 'Unknown')
+                    ELSE COALESCE(s.station_status_code, bp.project_status, bp.review_status, 'Unknown')
                 END AS station_status_code,
                 bp.review_status,
+                bp.project_status,
                 bp.project_created_at
             FROM bucket_projects bp
-            INNER JOIN station_information s ON s.station_code = bp.station_code
-            ORDER BY s.station_code, bp.project_created_at DESC
+            LEFT JOIN station_information s ON s.station_code = bp.join_code
+            ORDER BY COALESCE(s.station_code, bp.project_code), bp.project_created_at DESC
         `,
         params,
     };

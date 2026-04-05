@@ -109,16 +109,42 @@ export const getAllStationInformation = async (req: Request, res: Response): Pro
     try {
         const userRole = normalizeUserRole((req as any).user?.role);
         const userDepartment = (req as any).user?.department;
+        const statusFilter = req.query?.status;
+        const typeFilter = req.query?.type;
+        const cityFilter = req.query?.city;
 
-        const query = userRole === 'super_admin'
-            ? `SELECT * FROM station_information ORDER BY created_at DESC`
-            : `
-                SELECT * FROM station_information
-                WHERE (CASE WHEN lower(station_type_code) = 'frenchise' THEN 'franchise' ELSE lower(station_type_code) END) = $1
-                ORDER BY created_at DESC
-            `;
+        const conditions: string[] = [];
+        const params: unknown[] = [];
 
-        const params = userRole === 'super_admin' ? [] : [userDepartment];
+        if (userRole !== 'super_admin' && userDepartment) {
+            params.push(userDepartment);
+            conditions.push(`(CASE WHEN lower(station_type_code) = 'frenchise' THEN 'franchise' ELSE lower(station_type_code) END) = $${params.length}`);
+        }
+
+        if (statusFilter) {
+            params.push(String(statusFilter).trim().toLowerCase());
+            conditions.push(`lower(COALESCE(station_status_code, '')) = $${params.length}`);
+        }
+
+        if (typeFilter) {
+            const normalizedType = normalizeStationType(typeFilter);
+            if (normalizedType) {
+                params.push(normalizedType);
+                conditions.push(`(CASE WHEN lower(station_type_code) = 'frenchise' THEN 'franchise' ELSE lower(station_type_code) END) = $${params.length}`);
+            }
+        }
+
+        if (cityFilter) {
+            params.push(`%${String(cityFilter).trim()}%`);
+            conditions.push(`city ILIKE $${params.length}`);
+        }
+
+        const query = `
+            SELECT * FROM station_information
+            ${conditions.length ? `WHERE ${conditions.join(' AND ')}` : ''}
+            ORDER BY created_at DESC
+        `;
+
         const result = await pool.query(query, params);
 
         res.status(200).json({
