@@ -19,10 +19,12 @@ import investmentProjectsRoutes from './routes/investmentProjects.routes';
 import workflowTasksRoutes from './routes/workflowTasks.routes';
 import fileUploadRoutes from './routes/fileUpload.routes';
 import translationsRoutes from './routes/translations.routes';
+import surveyReportsRoutes from './routes/surveyReports.routes';
 import pool from './config/database';
 import { authenticateToken } from './middleware/auth';
 import { ensureWorkflowSchema } from './utils/workflow';
 import { ensureSupabaseBucketExists } from './config/supabase';
+import { ensureSurveySchema } from './utils/survey';
 import { isSchemaCompatibilityError } from './utils/dbErrors';
 
 // Load environment variables
@@ -144,6 +146,7 @@ app.use('/api/investment-projects', investmentProjectsRoutes);
 app.use('/api/tasks', workflowTasksRoutes);
 app.use('/api/files', fileUploadRoutes);
 app.use('/api/translate', translationsRoutes);
+app.use('/api/survey-reports', surveyReportsRoutes);
 
 ensureWorkflowSchema().catch((error) => {
     console.error('Workflow schema bootstrap failed:', error);
@@ -151,6 +154,10 @@ ensureWorkflowSchema().catch((error) => {
 
 ensureSupabaseBucketExists().catch((error) => {
     console.error('Supabase bucket bootstrap failed:', error);
+});
+
+ensureSurveySchema().catch((error) => {
+    console.error('Survey schema bootstrap failed:', error);
 });
 
 // ── Dashboard stats (authenticated) ──────────────────────────────────────────

@@ -46,7 +46,41 @@ export const createOwner = async (req: Request, res: Response): Promise<void> =>
         }
 
         const userId = (req as any).user?.id;
-        const query = `
+        const existingOwnerResult = await pool.query(
+            'SELECT id FROM owners WHERE station_code = $1 ORDER BY created_at DESC LIMIT 1',
+            [stationCode]
+        );
+
+        const values = [
+            ownerId, ownerName, issueDate || null, issuePlace, ownerMobile,
+            ownerAddress, ownerEmail, normalizedStationTypeCode, stationCode, userId
+        ];
+
+        if (existingOwnerResult.rows.length > 0) {
+            const existingOwnerId = existingOwnerResult.rows[0].id;
+            const updateQuery = `
+                UPDATE owners 
+                SET owner_id = COALESCE($1, owner_id),
+                    owner_name = COALESCE($2, owner_name),
+                    issue_date = COALESCE($3, issue_date),
+                    issue_place = COALESCE($4, issue_place),
+                    owner_mobile = COALESCE($5, owner_mobile),
+                    owner_address = COALESCE($6, owner_address),
+                    owner_email = COALESCE($7, owner_email),
+                    station_type_code = COALESCE($8, station_type_code),
+                    station_code = COALESCE($9, station_code),
+                    updated_by = $10,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id = $11
+                RETURNING *
+            `;
+
+            const result = await pool.query(updateQuery, [...values, existingOwnerId]);
+            res.status(200).json({ message: 'Owner information updated successfully', data: result.rows[0] });
+            return;
+        }
+
+        const insertQuery = `
             INSERT INTO owners (
                 owner_id, owner_name, issue_date, issue_place, owner_mobile, 
                 owner_address, owner_email, station_type_code, station_code, 
@@ -56,11 +90,7 @@ export const createOwner = async (req: Request, res: Response): Promise<void> =>
             RETURNING *
         `;
 
-        const values = [
-            ownerId, ownerName, issueDate || null, issuePlace, ownerMobile,
-            ownerAddress, ownerEmail, normalizedStationTypeCode, stationCode, userId
-        ];
-        const result = await pool.query(query, values);
+        const result = await pool.query(insertQuery, values);
 
         res.status(201).json({ message: 'Owner information created successfully', data: result.rows[0] });
     } catch (error: any) {
