@@ -309,8 +309,37 @@ app.get('/api/dashboard/stats', authenticateToken, async (req: Request, res: Res
 
         const workflowScopeQuery = buildWorkflowScopeQuery(departmentScoped);
 
+        const queryOneWithFallback = async <T extends Record<string, unknown>>(
+            label: string,
+            text: string,
+            params: unknown[],
+            fallback: T,
+        ): Promise<{ rows: T[] }> => {
+            try {
+                const result = await pool.query(text, params);
+                return { rows: [((result.rows[0] || fallback) as T)] };
+            } catch (error: any) {
+                console.error(`Dashboard stats query failed (${label}):`, error);
+                return { rows: [fallback] };
+            }
+        };
+
+        const queryRowsWithFallback = async <T extends Record<string, unknown>>(
+            label: string,
+            text: string,
+            params: unknown[],
+        ): Promise<{ rows: T[] }> => {
+            try {
+                const result = await pool.query(text, params);
+                return { rows: result.rows as T[] };
+            } catch (error: any) {
+                console.error(`Dashboard stats query failed (${label}):`, error);
+                return { rows: [] };
+            }
+        };
+
         const [stationsResult, projectsResult, recentResult, stationsListResult, workflowResult] = await Promise.all([
-            pool.query(`
+            queryOneWithFallback('stations summary', `
                 SELECT
                     COUNT(*) AS total,
                     COUNT(*) FILTER (WHERE station_status_code ILIKE '%execution%' OR station_status_code ILIKE '%progress%') AS under_execution,
@@ -319,8 +348,15 @@ app.get('/api/dashboard/stats', authenticateToken, async (req: Request, res: Res
                     COUNT(*) FILTER (WHERE station_status_code ILIKE '%soon%' OR station_status_code ILIKE '%opening%') AS opening_soon,
                     COUNT(*) FILTER (WHERE created_at >= date_trunc('month', CURRENT_DATE)) AS new_this_month
                 FROM station_information
-            `),
-            pool.query(`
+            `, [], {
+                total: 0,
+                under_execution: 0,
+                not_started: 0,
+                operational: 0,
+                opening_soon: 0,
+                new_this_month: 0,
+            }),
+            queryOneWithFallback('project summary', `
                 SELECT
                     COUNT(*) AS total,
                     COUNT(*) FILTER (WHERE review_status = 'Pending Review') AS pending_review,
@@ -328,20 +364,35 @@ app.get('/api/dashboard/stats', authenticateToken, async (req: Request, res: Res
                     COUNT(*) FILTER (WHERE review_status = 'Approved') AS approved,
                     COUNT(*) FILTER (WHERE review_status = 'Rejected') AS rejected
                 FROM investment_projects
-            `),
-            pool.query(`
+            `, [], {
+                total: 0,
+                pending_review: 0,
+                validated: 0,
+                approved: 0,
+                rejected: 0,
+            }),
+            queryRowsWithFallback('recent activities', `
                 SELECT project_name, review_status, created_at, department_type
                 FROM investment_projects
                 ORDER BY created_at DESC
                 LIMIT 5
-            `),
-            pool.query(`
+            `, []),
+            queryRowsWithFallback('stations list', `
                 SELECT station_name, station_status_code, created_at
                 FROM station_information
                 ORDER BY created_at DESC
                 LIMIT 10
-            `),
-            pool.query(workflowScopeQuery.text, workflowScopeQuery.params),
+            `, []),
+            queryOneWithFallback('workflow summary', workflowScopeQuery.text, workflowScopeQuery.params, {
+                new_project: 0,
+                pending_review: 0,
+                validated: 0,
+                contracted: 0,
+                documented: 0,
+                approved: 0,
+                rejected: 0,
+                total_projects: 0,
+            }),
         ]);
 
         res.status(200).json({
