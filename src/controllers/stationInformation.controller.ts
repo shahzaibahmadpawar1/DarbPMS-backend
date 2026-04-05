@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import pool from '../config/database';
 import { normalizeUserRole } from '../utils/roles';
+import { isSchemaCompatibilityError } from '../utils/dbErrors';
 
 const ALLOWED_STATION_TYPES = ['operation', 'rent', 'franchise', 'investment', 'ownership'] as const;
 
@@ -126,6 +127,14 @@ export const getAllStationInformation = async (req: Request, res: Response): Pro
             count: result.rows.length
         });
     } catch (error) {
+        if (isSchemaCompatibilityError(error)) {
+            res.status(200).json({
+                message: 'Station information retrieved successfully',
+                data: [],
+                count: 0
+            });
+            return;
+        }
         console.error('Error fetching station information:', error);
         res.status(500).json({
             error: 'Failed to fetch station information'
@@ -135,9 +144,9 @@ export const getAllStationInformation = async (req: Request, res: Response): Pro
 
 // Get station information by code
 export const getStationInformationByCode = async (req: Request, res: Response): Promise<void> => {
-    try {
-        const { stationCode } = req.params;
+    const { stationCode } = req.params;
 
+    try {
         const query = `
             SELECT * FROM station_information 
             WHERE id::text = $1 OR station_code = $1
@@ -157,7 +166,11 @@ export const getStationInformationByCode = async (req: Request, res: Response): 
             message: 'Station information retrieved successfully',
             data: result.rows[0]
         });
-    } catch (error) {
+    } catch (error: any) {
+        if (isSchemaCompatibilityError(error)) {
+            res.status(404).json({ error: 'Station not found', identifier: stationCode });
+            return;
+        }
         console.error('Error fetching station information:', error);
         res.status(500).json({
             error: 'Failed to fetch station information'

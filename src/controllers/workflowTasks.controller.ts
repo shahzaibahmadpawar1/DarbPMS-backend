@@ -2,6 +2,7 @@ import { Response } from 'express';
 import pool from '../config/database';
 import { AuthRequest } from '../types';
 import { ensureWorkflowSchema, WorkflowTaskFlowType, recordWorkflowTransition } from '../utils/workflow';
+import { isSchemaCompatibilityError } from '../utils/dbErrors';
 
 const normalizeDepartment = (value: unknown): 'investment' | 'franchise' | null => {
     const normalized = String(value || '').trim().toLowerCase();
@@ -121,6 +122,10 @@ export const getWorkflowTasks = async (req: AuthRequest, res: Response): Promise
         const result = await pool.query(query, params);
         res.status(200).json({ data: result.rows });
     } catch (error: any) {
+        if (isSchemaCompatibilityError(error)) {
+            res.status(200).json({ data: [] });
+            return;
+        }
         res.status(500).json({ error: 'Failed to fetch workflow tasks', details: error.message });
     }
 };

@@ -23,6 +23,7 @@ import pool from './config/database';
 import { authenticateToken } from './middleware/auth';
 import { ensureWorkflowSchema } from './utils/workflow';
 import { ensureSupabaseBucketExists } from './config/supabase';
+import { isSchemaCompatibilityError } from './utils/dbErrors';
 
 // Load environment variables
 dotenv.config();
@@ -239,6 +240,37 @@ app.get('/api/dashboard/stats', authenticateToken, async (req: Request, res: Res
         });
     } catch (error: any) {
         console.error('Dashboard stats error:', error);
+        if (isSchemaCompatibilityError(error)) {
+            res.status(200).json({
+                stations: {
+                    total: 0,
+                    under_execution: 0,
+                    not_started: 0,
+                    operational: 0,
+                    opening_soon: 0,
+                    new_this_month: 0,
+                },
+                projects: {
+                    total: 0,
+                    pending_review: 0,
+                    validated: 0,
+                    approved: 0,
+                    rejected: 0,
+                },
+                recentActivities: [],
+                stationsList: [],
+                workflow: {
+                    new_project: 0,
+                    under_review: 0,
+                    contracted: 0,
+                    documented: 0,
+                    approved: 0,
+                    rejected: 0,
+                    total_projects: 0,
+                },
+            });
+            return;
+        }
         res.status(500).json({ error: 'Failed to fetch dashboard stats', details: error.message });
     }
 });

@@ -67,17 +67,27 @@ const hydrateUserFromDb = async (req: AuthRequest): Promise<boolean> => {
     return true;
 };
 
-const getStationDepartment = async (stationCode: string): Promise<'investment' | 'franchise' | null> => {
+const resolveStationIdentifier = async (
+    identifier: string
+): Promise<{ stationCode: string; department: 'investment' | 'franchise' | null } | null> => {
     const result = await pool.query(
-        'SELECT station_type_code FROM station_information WHERE station_code = $1 LIMIT 1',
-        [stationCode]
+        `
+            SELECT station_code, station_type_code
+            FROM station_information
+            WHERE station_code = $1 OR id::text = $1
+            LIMIT 1
+        `,
+        [identifier]
     );
 
     if (!result.rows.length) {
         return null;
     }
 
-    return normalizeDepartment(result.rows[0].station_type_code);
+    return {
+        stationCode: result.rows[0].station_code,
+        department: normalizeDepartment(result.rows[0].station_type_code),
+    };
 };
 
 export const authenticateToken = (
@@ -245,13 +255,21 @@ export const requireStationDepartmentAccess = (
                 return;
             }
 
-            const stationDepartment = await getStationDepartment(stationCode);
-            if (!stationDepartment) {
+            const stationScope = await resolveStationIdentifier(String(stationCode));
+            if (!stationScope || !stationScope.department) {
                 res.status(403).json({ success: false, message: 'Station is outside allowed department scope' });
                 return;
             }
 
-            if (req.user.department !== stationDepartment) {
+            // Normalize to station_code so downstream controllers can query station-scoped tables reliably.
+            if (paramStationCode) {
+                (req.params as any)[paramField] = stationScope.stationCode;
+            }
+            if (bodyStationCode) {
+                (req.body as any)[bodyField] = stationScope.stationCode;
+            }
+
+            if (req.user.department !== stationScope.department) {
                 res.status(403).json({ success: false, message: 'Cross-department access is not allowed' });
                 return;
             }

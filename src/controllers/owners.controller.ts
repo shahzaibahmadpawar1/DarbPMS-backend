@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
 import pool from '../config/database';
+import { isSchemaCompatibilityError } from '../utils/dbErrors';
 
 const ALLOWED_STATION_TYPES = ['operation', 'rent', 'franchise', 'investment', 'ownership'] as const;
 
@@ -101,6 +102,10 @@ export const getOwnersByStation = async (req: Request, res: Response): Promise<v
         const result = await pool.query('SELECT * FROM owners WHERE station_code = $1 ORDER BY created_at DESC', [stationCode]);
         res.status(200).json({ message: 'Owners retrieved successfully', data: result.rows, count: result.rows.length });
     } catch (error: any) {
+        if (isSchemaCompatibilityError(error)) {
+            res.status(200).json({ message: 'Owners retrieved successfully', data: [], count: 0 });
+            return;
+        }
         console.error('Error fetching owners:', error);
         res.status(500).json({ error: 'Failed to fetch owners', details: error.message });
     }

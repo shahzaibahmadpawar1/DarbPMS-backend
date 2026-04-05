@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
 import pool from '../config/database';
+import { isSchemaCompatibilityError } from '../utils/dbErrors';
 
 export const createDispenser = async (req: Request, res: Response): Promise<void> => {
     try {
@@ -56,7 +57,11 @@ export const getDispensersByStation = async (req: Request, res: Response): Promi
         const { stationCode } = req.params;
         const result = await pool.query('SELECT * FROM dispensers WHERE station_code = $1 ORDER BY created_at DESC', [stationCode]);
         res.status(200).json({ message: 'Dispensers retrieved successfully', data: result.rows, count: result.rows.length });
-    } catch (error) {
+    } catch (error: any) {
+        if (isSchemaCompatibilityError(error)) {
+            res.status(200).json({ message: 'Dispensers retrieved successfully', data: [], count: 0 });
+            return;
+        }
         console.error('Error fetching dispensers:', error);
         res.status(500).json({ error: 'Failed to fetch dispensers' });
     }

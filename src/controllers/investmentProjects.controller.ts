@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import pool from '../config/database';
 import { createWorkflowTaskForProject } from './workflowTasks.controller';
 import { deriveAction, recordWorkflowTransition } from '../utils/workflow';
+import { isSchemaCompatibilityError } from '../utils/dbErrors';
 
 const ALLOWED_CONTRACT_TYPES = new Set(['Operation Station', 'Lease Stations', 'Investment', 'Franchise Station']);
 
@@ -148,6 +149,10 @@ export const getAllInvestmentProjects = async (req: Request, res: Response): Pro
         const result = await pool.query(query, params);
         res.status(200).json({ message: 'Projects retrieved', data: result.rows, count: result.rows.length });
     } catch (error: any) {
+        if (isSchemaCompatibilityError(error)) {
+            res.status(200).json({ message: 'Projects retrieved', data: [], count: 0 });
+            return;
+        }
         res.status(500).json({ error: 'Failed to fetch projects', details: error.message });
     }
 };
@@ -170,6 +175,10 @@ export const getInvestmentProjectsByStation = async (req: Request, res: Response
         const result = await pool.query(query, params);
         res.status(200).json({ message: 'Projects retrieved', data: result.rows, count: result.rows.length });
     } catch (error: any) {
+        if (isSchemaCompatibilityError(error)) {
+            res.status(200).json({ message: 'Projects retrieved', data: [], count: 0 });
+            return;
+        }
         res.status(500).json({ error: 'Failed to fetch projects', details: error.message });
     }
 };

@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
 import pool from '../config/database';
+import { isSchemaCompatibilityError } from '../utils/dbErrors';
 
 // ─── SALAMAH LICENSE ──────────────────────────────────────────────────────────
 export const createSalamahLicense = async (req: Request, res: Response): Promise<void> => {
@@ -284,6 +285,10 @@ export const getLicenseAttachmentsByStation = async (req: Request, res: Response
         const result = await pool.query('SELECT * FROM government_license_attachments WHERE station_code = $1', [req.params.stationCode]);
         res.status(200).json({ message: 'License attachments retrieved', data: result.rows[0] || null });
     } catch (error: any) {
+        if (isSchemaCompatibilityError(error)) {
+            res.status(200).json({ message: 'License attachments retrieved', data: null });
+            return;
+        }
         res.status(500).json({ error: 'Failed to fetch license attachments', details: error.message });
     }
 };
