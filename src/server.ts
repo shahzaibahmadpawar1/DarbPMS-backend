@@ -121,7 +121,7 @@ const buildWorkflowScopeQuery = (departmentType: string | null) => {
 };
 
 const buildDashboardStationQuery = (bucket: ReturnType<typeof normalizeDashboardBucket>, departmentType: string | null) => {
-    const filterClause = departmentType ? 'AND p.department_type = $1' : '';
+    const filterClause = departmentType ? 'WHERE 1 = 1 AND p.department_type = $1' : 'WHERE 1 = 1';
     const params = departmentType ? [departmentType] : [];
     const bucketClause = (() => {
         switch (bucket) {
@@ -156,21 +156,45 @@ const buildDashboardStationQuery = (bucket: ReturnType<typeof normalizeDashboard
 
     return {
         text: `
-            SELECT DISTINCT ON (s.station_code)
-                s.id,
-                s.station_code,
-                s.station_name,
-                s.city,
-                s.station_type_code,
-                s.station_status_code,
-                p.review_status,
-                p.created_at AS project_created_at
-            FROM station_information s
-            INNER JOIN investment_projects p ON p.station_code = s.station_code
-            WHERE 1 = 1
-              ${filterClause}
-              ${bucketClause}
-            ORDER BY s.station_code, p.created_at DESC
+            WITH bucket_projects AS (
+                SELECT
+                    p.id AS project_id,
+                    p.project_code,
+                    p.project_name,
+                    p.city AS project_city,
+                    p.department_type,
+                    p.project_status,
+                    p.review_status,
+                    p.created_at AS project_created_at,
+                    COALESCE(NULLIF(p.station_code, ''), p.project_code) AS join_code
+                FROM investment_projects p
+                ${filterClause}
+                ${bucketClause}
+            )
+            SELECT DISTINCT ON (display_code)
+                COALESCE(s.id::text, bp.project_id::text) AS id,
+                COALESCE(s.station_code, bp.project_code) AS station_code,
+                COALESCE(s.station_name, bp.project_name) AS station_name,
+                COALESCE(s.city, bp.project_city) AS city,
+                COALESCE(
+                    NULLIF(s.station_type_code, ''),
+                    CASE
+                        WHEN lower(bp.department_type) = 'frenchise' THEN 'franchise'
+                        ELSE lower(bp.department_type)
+                    END,
+                    bp.department_type
+                ) AS station_type_code,
+                CASE
+                    WHEN '${bucket}' = 'contracted' THEN 'Contracted'
+                    WHEN '${bucket}' = 'documented' THEN 'Documented'
+                    ELSE COALESCE(s.station_status_code, bp.project_status, bp.review_status)
+                END AS station_status_code,
+                bp.review_status,
+                bp.project_status,
+                bp.project_created_at
+            FROM bucket_projects bp
+            LEFT JOIN station_information s ON s.station_code = bp.join_code
+            ORDER BY COALESCE(s.station_code, bp.project_code), bp.project_created_at DESC
         `,
         params,
     };
