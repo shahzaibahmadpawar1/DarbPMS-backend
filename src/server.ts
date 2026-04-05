@@ -61,6 +61,121 @@ const corsOptions: CorsOptions = {
     allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept'],
 };
 
+const normalizeDepartment = (value: unknown): 'investment' | 'franchise' | null => {
+    const normalized = String(value || '').trim().toLowerCase();
+    if (!normalized) return null;
+    if (normalized === 'investment') return 'investment';
+    if (normalized === 'franchise' || normalized === 'frenchise') return 'franchise';
+    return null;
+};
+
+const normalizeDashboardBucket = (value: unknown): 'total-projects' | 'pending-review' | 'validated' | 'approved' | 'new-projects' | 'contracted' | 'documented' => {
+    const normalized = String(value || 'total-projects').trim().toLowerCase();
+    if (['total-projects', 'total', 'all'].includes(normalized)) return 'total-projects';
+    if (normalized === 'pending-review' || normalized === 'pending') return 'pending-review';
+    if (normalized === 'validated') return 'validated';
+    if (normalized === 'approved') return 'approved';
+    if (normalized === 'new-projects' || normalized === 'new-project') return 'new-projects';
+    if (normalized === 'contracted') return 'contracted';
+    if (normalized === 'documented' || normalized === 'documents') return 'documented';
+    return 'total-projects';
+};
+
+const buildWorkflowScopeQuery = (departmentType: string | null) => {
+    const filter = departmentType ? 'WHERE department_type = $1' : '';
+    const params = departmentType ? [departmentType] : [];
+
+    return {
+        text: `
+            WITH scoped_projects AS (
+                SELECT id, review_status, department_type
+                FROM investment_projects
+                ${filter}
+            ),
+            contract_projects AS (
+                SELECT DISTINCT t.investment_project_id AS project_id
+                FROM project_workflow_tasks t
+                INNER JOIN scoped_projects p ON p.id = t.investment_project_id
+                WHERE t.flow_type = 'contract'
+                  AND t.status IN ('manager_queue', 'assigned', 'employee_submitted', 'under_super_admin_review')
+            ),
+            document_projects AS (
+                SELECT DISTINCT t.investment_project_id AS project_id
+                FROM project_workflow_tasks t
+                INNER JOIN scoped_projects p ON p.id = t.investment_project_id
+                WHERE t.flow_type = 'documents'
+                  AND t.status IN ('manager_queue', 'assigned', 'employee_submitted', 'under_super_admin_review')
+            )
+            SELECT
+                (SELECT COUNT(*) FROM scoped_projects) AS total_projects,
+                (SELECT COUNT(*) FROM scoped_projects WHERE review_status = 'Pending Review') AS new_project,
+                (SELECT COUNT(*) FROM scoped_projects WHERE review_status = 'Pending Review') AS pending_review,
+                (SELECT COUNT(*) FROM scoped_projects WHERE review_status = 'Validated') AS validated,
+                (SELECT COUNT(*) FROM contract_projects) AS contracted,
+                (SELECT COUNT(*) FROM document_projects) AS documented,
+                (SELECT COUNT(*) FROM scoped_projects WHERE review_status = 'Approved') AS approved,
+                (SELECT COUNT(*) FROM scoped_projects WHERE review_status = 'Rejected') AS rejected
+        `,
+        params,
+    };
+};
+
+const buildDashboardStationQuery = (bucket: ReturnType<typeof normalizeDashboardBucket>, departmentType: string | null) => {
+    const filterClause = departmentType ? 'AND p.department_type = $1' : '';
+    const params = departmentType ? [departmentType] : [];
+    const bucketClause = (() => {
+        switch (bucket) {
+            case 'pending-review':
+            case 'new-projects':
+                return "AND p.review_status = 'Pending Review'";
+            case 'validated':
+                return "AND p.review_status = 'Validated'";
+            case 'approved':
+                return "AND p.review_status = 'Approved'";
+            case 'contracted':
+                return `AND EXISTS (
+                    SELECT 1
+                    FROM project_workflow_tasks t
+                    WHERE t.investment_project_id = p.id
+                      AND t.flow_type = 'contract'
+                      AND t.status IN ('manager_queue', 'assigned', 'employee_submitted', 'under_super_admin_review')
+                )`;
+            case 'documented':
+                return `AND EXISTS (
+                    SELECT 1
+                    FROM project_workflow_tasks t
+                    WHERE t.investment_project_id = p.id
+                      AND t.flow_type = 'documents'
+                      AND t.status IN ('manager_queue', 'assigned', 'employee_submitted', 'under_super_admin_review')
+                )`;
+            case 'total-projects':
+            default:
+                return '';
+        }
+    })();
+
+    return {
+        text: `
+            SELECT DISTINCT ON (s.station_code)
+                s.id,
+                s.station_code,
+                s.station_name,
+                s.city,
+                s.station_type_code,
+                s.station_status_code,
+                p.review_status,
+                p.created_at AS project_created_at
+            FROM station_information s
+            INNER JOIN investment_projects p ON p.station_code = s.station_code
+            WHERE 1 = 1
+              ${filterClause}
+              ${bucketClause}
+            ORDER BY s.station_code, p.created_at DESC
+        `,
+        params,
+    };
+};
+
 app.use(cors(corsOptions));
 app.options('*', cors(corsOptions));
 app.use(express.json());
@@ -166,7 +281,9 @@ app.get('/api/dashboard/stats', authenticateToken, async (req: Request, res: Res
         const authReq = req as any;
         const userRole = authReq.user?.role;
         const userDepartment = authReq.user?.department;
-        const departmentScoped = userRole !== 'super_admin' ? userDepartment : null;
+        const departmentScoped = userRole !== 'super_admin' ? normalizeDepartment(userDepartment) : normalizeDepartment((req.query as any)?.departmentType);
+
+        const workflowScopeQuery = buildWorkflowScopeQuery(departmentScoped);
 
         const [stationsResult, projectsResult, recentResult, stationsListResult, workflowResult] = await Promise.all([
             pool.query(`
@@ -200,42 +317,7 @@ app.get('/api/dashboard/stats', authenticateToken, async (req: Request, res: Res
                 ORDER BY created_at DESC
                 LIMIT 10
             `),
-            departmentScoped
-                ? pool.query(`
-                    WITH dept_projects AS (
-                        SELECT id, review_status
-                        FROM investment_projects
-                        WHERE department_type = $1
-                    ),
-                    contract_projects AS (
-                        SELECT DISTINCT investment_project_id AS project_id
-                        FROM project_workflow_tasks
-                        WHERE flow_type = 'contract' AND (origin_department = $1 OR target_department = $1)
-                    ),
-                    document_projects AS (
-                        SELECT DISTINCT investment_project_id AS project_id
-                        FROM project_workflow_tasks
-                        WHERE flow_type = 'documents' AND (origin_department = $1 OR target_department = $1)
-                    )
-                    SELECT
-                        (SELECT COUNT(*) FROM dept_projects WHERE review_status = 'Pending Review') AS new_project,
-                        (SELECT COUNT(*) FROM dept_projects WHERE review_status = 'Validated') AS under_review,
-                        (SELECT COUNT(*) FROM contract_projects) AS contracted,
-                        (SELECT COUNT(*) FROM document_projects) AS documented,
-                        (SELECT COUNT(*) FROM dept_projects WHERE review_status = 'Approved') AS approved,
-                        (SELECT COUNT(*) FROM dept_projects WHERE review_status = 'Rejected') AS rejected,
-                        (
-                            SELECT COUNT(DISTINCT project_id)
-                            FROM (
-                                SELECT id AS project_id FROM dept_projects WHERE review_status = 'Approved'
-                                UNION
-                                SELECT project_id FROM contract_projects
-                                UNION
-                                SELECT project_id FROM document_projects
-                            ) x
-                        ) AS total_projects
-                `, [departmentScoped])
-                : Promise.resolve({ rows: [null] }),
+            pool.query(workflowScopeQuery.text, workflowScopeQuery.params),
         ]);
 
         res.status(200).json({
@@ -279,6 +361,34 @@ app.get('/api/dashboard/stats', authenticateToken, async (req: Request, res: Res
             return;
         }
         res.status(500).json({ error: 'Failed to fetch dashboard stats', details: error.message });
+    }
+});
+
+app.get('/api/dashboard/stations', authenticateToken, async (req: Request, res: Response) => {
+    try {
+        const authReq = req as any;
+        const userRole = authReq.user?.role;
+        const userDepartment = authReq.user?.department;
+        const bucket = normalizeDashboardBucket((req.query as any)?.bucket);
+        const departmentType = userRole === 'super_admin'
+            ? normalizeDepartment((req.query as any)?.departmentType)
+            : normalizeDepartment(userDepartment);
+
+        const stationQuery = buildDashboardStationQuery(bucket, departmentType);
+        const result = await pool.query(stationQuery.text, stationQuery.params);
+
+        res.status(200).json({
+            bucket,
+            count: result.rows.length,
+            data: result.rows,
+        });
+    } catch (error: any) {
+        console.error('Dashboard station drilldown error:', error);
+        if (isSchemaCompatibilityError(error)) {
+            res.status(200).json({ bucket: 'total-projects', count: 0, data: [] });
+            return;
+        }
+        res.status(500).json({ error: 'Failed to fetch dashboard station list', details: error.message });
     }
 });
 
