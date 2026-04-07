@@ -1,6 +1,7 @@
 import pool from '../config/database';
 import { Department, User, UserRole, UserStatus, UserType } from '../types';
 import { normalizeUserRole } from '../utils/roles';
+import { isSchemaCompatibilityError } from '../utils/dbErrors';
 
 function normalizeUserRow(row: any): User {
     return {
@@ -77,6 +78,37 @@ export class UserModel {
             return normalizeUserRow({ ...createdUser, station_codes: stationCodes });
         } catch (error: any) {
             await client.query('ROLLBACK');
+
+            if (isSchemaCompatibilityError(error)) {
+                if (user_type === 'external') {
+                    throw new Error('External users require database migration for station assignments');
+                }
+
+                const fallbackQuery = `
+                    INSERT INTO users (username, password, role, department, station_id)
+                    VALUES ($1, $2, $3, $4, $5)
+                    RETURNING id, username, password, role, department, station_id, created_at, updated_at
+                `;
+
+                const fallbackResult = await pool.query(fallbackQuery, [
+                    username,
+                    password,
+                    role,
+                    department,
+                    station_id,
+                ]);
+
+                return normalizeUserRow({
+                    ...fallbackResult.rows[0],
+                    full_name: null,
+                    email: null,
+                    phone: null,
+                    user_type: 'internal',
+                    status: 'active',
+                    station_codes: [],
+                });
+            }
+
             // Handle unique constraint violation
             if (error.code === '23505') {
                 throw new Error('Username already exists');
@@ -103,7 +135,23 @@ export class UserModel {
 
             const stationCodes = await this.getStationCodesByUserId(result.rows[0].id);
             return normalizeUserRow({ ...result.rows[0], station_codes: stationCodes });
-        } catch (error) {
+        } catch (error: any) {
+            if (isSchemaCompatibilityError(error)) {
+                const fallback = await pool.query('SELECT id, username, password, role, department, station_id, created_at, updated_at FROM users WHERE username = $1', [username]);
+                if (!fallback.rows[0]) {
+                    return null;
+                }
+
+                return normalizeUserRow({
+                    ...fallback.rows[0],
+                    full_name: null,
+                    email: null,
+                    phone: null,
+                    user_type: 'internal',
+                    status: 'active',
+                    station_codes: [],
+                });
+            }
             throw error;
         }
     }
@@ -144,7 +192,23 @@ export class UserModel {
 
             const stationCodes = await this.getStationCodesByUserId(id);
             return normalizeUserRow({ ...result.rows[0], station_codes: stationCodes });
-        } catch (error) {
+        } catch (error: any) {
+            if (isSchemaCompatibilityError(error)) {
+                const fallback = await pool.query('SELECT id, username, password, role, department, station_id, created_at, updated_at FROM users WHERE id = $1', [id]);
+                if (!fallback.rows[0]) {
+                    return null;
+                }
+
+                return normalizeUserRow({
+                    ...fallback.rows[0],
+                    full_name: null,
+                    email: null,
+                    phone: null,
+                    user_type: 'internal',
+                    status: 'active',
+                    station_codes: [],
+                });
+            }
             throw error;
         }
     }
@@ -176,7 +240,19 @@ export class UserModel {
         try {
             const result = await pool.query(query);
             return result.rows.map(normalizeUserRow);
-        } catch (error) {
+        } catch (error: any) {
+            if (isSchemaCompatibilityError(error)) {
+                const fallback = await pool.query('SELECT id, username, password, role, department, station_id, created_at, updated_at FROM users ORDER BY created_at DESC');
+                return fallback.rows.map((row: any) => normalizeUserRow({
+                    ...row,
+                    full_name: null,
+                    email: null,
+                    phone: null,
+                    user_type: 'internal',
+                    status: 'active',
+                    station_codes: [],
+                }));
+            }
             throw error;
         }
     }
@@ -197,8 +273,136 @@ export class UserModel {
 
             const stationCodes = await this.getStationCodesByUserId(id);
             return normalizeUserRow({ ...result.rows[0], station_codes: stationCodes });
-        } catch (error) {
+        } catch (error: any) {
+            if (isSchemaCompatibilityError(error)) {
+                throw new Error('Status updates require database migration');
+            }
             throw error;
+        }
+    }
+
+    static async updateById(
+        id: string,
+        payload: {
+            username: string;
+            password: string;
+            role: UserRole;
+            department: Department | null;
+            station_id: string | null;
+            full_name: string | null;
+            email: string | null;
+            phone: string | null;
+            user_type: UserType;
+            status: UserStatus;
+            station_codes: string[];
+        }
+    ): Promise<User | null> {
+        const client = await pool.connect();
+
+        try {
+            await client.query('BEGIN');
+
+            const updateQuery = `
+                UPDATE users
+                SET
+                    username = $2,
+                    password = $3,
+                    role = $4,
+                    department = $5,
+                    station_id = $6,
+                    full_name = $7,
+                    email = $8,
+                    phone = $9,
+                    user_type = $10,
+                    status = $11,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id = $1
+                RETURNING id, username, password, role, department, station_id, full_name, email, phone, user_type, status, created_at, updated_at
+            `;
+
+            const result = await client.query(updateQuery, [
+                id,
+                payload.username,
+                payload.password,
+                payload.role,
+                payload.department,
+                payload.station_id,
+                payload.full_name,
+                payload.email,
+                payload.phone,
+                payload.user_type,
+                payload.status,
+            ]);
+
+            if (!result.rows[0]) {
+                await client.query('ROLLBACK');
+                return null;
+            }
+
+            await client.query('DELETE FROM user_station_access WHERE user_id = $1', [id]);
+
+            const normalizedCodes = Array.from(
+                new Set(
+                    payload.station_codes
+                        .map((code) => String(code || '').trim())
+                        .filter((code) => code.length > 0)
+                )
+            );
+
+            if (payload.user_type === 'external' && normalizedCodes.length > 0) {
+                await client.query(
+                    `
+                        INSERT INTO user_station_access (user_id, station_code)
+                        SELECT $1, unnest($2::text[])
+                    `,
+                    [id, normalizedCodes]
+                );
+            }
+
+            await client.query('COMMIT');
+            return normalizeUserRow({ ...result.rows[0], station_codes: normalizedCodes });
+        } catch (error: any) {
+            await client.query('ROLLBACK');
+
+            if (isSchemaCompatibilityError(error)) {
+                if (payload.user_type === 'external') {
+                    throw new Error('External user edits require database migration for station assignments');
+                }
+
+                const fallback = await pool.query(
+                    `
+                        UPDATE users
+                        SET
+                            username = $2,
+                            password = $3,
+                            role = $4,
+                            department = $5,
+                            station_id = $6,
+                            updated_at = CURRENT_TIMESTAMP
+                        WHERE id = $1
+                        RETURNING id, username, password, role, department, station_id, created_at, updated_at
+                    `,
+                    [id, payload.username, payload.password, payload.role, payload.department, payload.station_id]
+                );
+
+                if (!fallback.rows[0]) {
+                    return null;
+                }
+
+                return normalizeUserRow({
+                    ...fallback.rows[0],
+                    full_name: null,
+                    email: null,
+                    phone: null,
+                    user_type: 'internal',
+                    status: 'active',
+                    station_codes: [],
+                });
+            }
+
+            throw error;
+        } finally {
+            client.release();
         }
     }
 

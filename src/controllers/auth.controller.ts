@@ -416,6 +416,141 @@ export class AuthController {
         }
     }
 
+    // Update user details (admin only)
+    static async updateUser(req: AuthRequest, res: Response): Promise<void> {
+        try {
+            const { id } = req.params;
+            const existing = await UserModel.findById(id);
+
+            if (!existing) {
+                res.status(404).json({ success: false, message: 'User not found' });
+                return;
+            }
+
+            const username = req.body?.username !== undefined ? String(req.body.username).trim() : existing.username;
+            const password = req.body?.password !== undefined ? String(req.body.password) : existing.password;
+
+            if (!username || !password) {
+                res.status(400).json({ success: false, message: 'Username and password are required' });
+                return;
+            }
+
+            if (username.length < 3 || username.length > 50) {
+                res.status(400).json({ success: false, message: 'Username must be between 3 and 50 characters' });
+                return;
+            }
+
+            if (password.length < 6) {
+                res.status(400).json({ success: false, message: 'Password must be at least 6 characters long' });
+                return;
+            }
+
+            const userType: UserType = req.body?.user_type !== undefined
+                ? normalizeUserType(req.body.user_type)
+                : existing.user_type;
+
+            const status: UserStatus = req.body?.status !== undefined
+                ? normalizeUserStatus(req.body.status)
+                : existing.status;
+
+            if (req.user?.id === id && status === 'inactive') {
+                res.status(400).json({ success: false, message: 'You cannot deactivate your own account' });
+                return;
+            }
+
+            const fullName = req.body?.full_name !== undefined
+                ? (String(req.body.full_name || '').trim() || null)
+                : (existing.full_name ?? null);
+
+            const userEmail = req.body?.email !== undefined
+                ? (String(req.body.email || '').trim().toLowerCase() || null)
+                : (existing.email ?? null);
+
+            if (userEmail && !isValidEmail(userEmail)) {
+                res.status(400).json({ success: false, message: 'Please provide a valid email address' });
+                return;
+            }
+
+            const userPhone = req.body?.phone !== undefined
+                ? (String(req.body.phone || '').trim() || null)
+                : (existing.phone ?? null);
+
+            let userRole: UserRole = req.body?.role !== undefined
+                ? (validRoles.includes(req.body.role) ? req.body.role : existing.role)
+                : existing.role;
+
+            let normalizedDepartment: Department | null = req.body?.department !== undefined
+                ? normalizeDepartment(req.body.department)
+                : existing.department;
+
+            const stationCodes: string[] = req.body?.station_codes !== undefined
+                ? (Array.isArray(req.body.station_codes)
+                    ? Array.from(new Set(req.body.station_codes.map((code: unknown) => String(code || '').trim()).filter((code: string) => code.length > 0)))
+                    : [])
+                : (existing.station_codes || []);
+
+            if (userType === 'external') {
+                userRole = 'employee';
+                normalizedDepartment = null;
+
+                if (stationCodes.length === 0) {
+                    res.status(400).json({ success: false, message: 'At least one station is required for external users' });
+                    return;
+                }
+            } else {
+                if (userRole === 'super_admin') {
+                    normalizedDepartment = null;
+                } else if (!normalizedDepartment) {
+                    res.status(400).json({ success: false, message: 'Department is required for non-super-admin users' });
+                    return;
+                }
+            }
+
+            const updatedUser = await UserModel.updateById(id, {
+                username,
+                password,
+                role: userRole,
+                department: normalizedDepartment,
+                station_id: existing.station_id,
+                full_name: fullName,
+                email: userEmail,
+                phone: userPhone,
+                user_type: userType,
+                status,
+                station_codes: userType === 'external' ? stationCodes : [],
+            });
+
+            if (!updatedUser) {
+                res.status(404).json({ success: false, message: 'User not found' });
+                return;
+            }
+
+            res.status(200).json({
+                success: true,
+                message: 'User updated successfully',
+                user: AuthController.toUserResponse(updatedUser),
+            });
+        } catch (error: any) {
+            if (error.message === 'External user edits require database migration for station assignments') {
+                res.status(400).json({ success: false, message: error.message });
+                return;
+            }
+
+            if (error.code === '23505' && typeof error?.constraint === 'string' && error.constraint.includes('username')) {
+                res.status(409).json({ success: false, message: 'Username already exists' });
+                return;
+            }
+
+            if (error.code === '23505' && typeof error?.constraint === 'string' && error.constraint.includes('email')) {
+                res.status(409).json({ success: false, message: 'Email already exists' });
+                return;
+            }
+
+            console.error('Update user error:', error);
+            res.status(500).json({ success: false, message: 'Internal server error' });
+        }
+    }
+
     // Delete a user (admin only)
     static async deleteUser(req: AuthRequest, res: Response): Promise<void> {
         try {
