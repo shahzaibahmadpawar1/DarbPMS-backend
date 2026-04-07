@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import pool from '../config/database';
 import { normalizeUserRole } from '../utils/roles';
 import { isSchemaCompatibilityError } from '../utils/dbErrors';
+import { UserModel } from '../models/user.model';
 
 const ALLOWED_STATION_TYPES = ['operation', 'rent', 'franchise', 'investment', 'ownership'] as const;
 
@@ -109,12 +110,29 @@ export const getAllStationInformation = async (req: Request, res: Response): Pro
     try {
         const userRole = normalizeUserRole((req as any).user?.role);
         const userDepartment = (req as any).user?.department;
+        const userType = String((req as any).user?.user_type || 'internal').toLowerCase();
+        const userId = (req as any).user?.id;
         const statusFilter = req.query?.status;
         const typeFilter = req.query?.type;
         const cityFilter = req.query?.city;
 
         const conditions: string[] = [];
         const params: unknown[] = [];
+
+        if (userType === 'external' && userId) {
+            const assignedCodes = await UserModel.getStationCodesByUserId(userId);
+            if (assignedCodes.length === 0) {
+                res.status(200).json({
+                    message: 'Station information retrieved successfully',
+                    data: [],
+                    count: 0
+                });
+                return;
+            }
+
+            params.push(assignedCodes);
+            conditions.push(`station_code = ANY($${params.length})`);
+        }
 
         if (userRole !== 'super_admin' && userDepartment) {
             params.push(userDepartment);

@@ -1,11 +1,26 @@
 import { Request, Response } from 'express';
 import jwt from 'jsonwebtoken';
 import { UserModel } from '../models/user.model';
-import { RegisterRequest, LoginRequest, AuthResponse, AuthRequest, Department, UserResponse, UserRole } from '../types';
+import { RegisterRequest, LoginRequest, AuthResponse, AuthRequest, Department, UserResponse, UserRole, UserStatus, UserType } from '../types';
 import { normalizeUserRole } from '../utils/roles';
 
 const validRoles: UserRole[] = ['super_admin', 'department_manager', 'supervisor', 'employee'];
 const validDepartments: Department[] = ['investment', 'franchise'];
+const validStatuses: UserStatus[] = ['active', 'inactive'];
+
+const isValidEmail = (value: string): boolean => {
+    return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
+};
+
+const normalizeUserType = (value: unknown): UserType => {
+    const normalized = String(value || '').trim().toLowerCase();
+    return normalized === 'external' ? 'external' : 'internal';
+};
+
+const normalizeUserStatus = (value: unknown): UserStatus => {
+    const normalized = String(value || '').trim().toLowerCase();
+    return validStatuses.includes(normalized as UserStatus) ? (normalized as UserStatus) : 'active';
+};
 
 const normalizeDepartment = (value: unknown): Department | null => {
     if (value === null || value === undefined || value === '') {
@@ -22,10 +37,28 @@ const normalizeDepartment = (value: unknown): Department | null => {
 
 
 export class AuthController {
+    private static toUserResponse(user: any): UserResponse {
+        return {
+            id: user.id,
+            username: user.username,
+            role: user.role,
+            department: user.department,
+            station_id: user.station_id,
+            full_name: user.full_name ?? null,
+            email: user.email ?? null,
+            phone: user.phone ?? null,
+            user_type: user.user_type ?? 'internal',
+            status: user.status ?? 'active',
+            station_codes: Array.isArray(user.station_codes) ? user.station_codes : [],
+            created_at: user.created_at,
+            updated_at: user.updated_at
+        };
+    }
+
     // Register a new user
     static async register(req: Request, res: Response): Promise<void> {
         try {
-            const { username, password } = req.body as RegisterRequest;
+            const { username, password, full_name, email, phone } = req.body as RegisterRequest;
 
             // Validate input
             if (!username || !password) {
@@ -54,6 +87,15 @@ export class AuthController {
                 return;
             }
 
+            const sanitizedEmail = email ? String(email).trim().toLowerCase() : null;
+            if (sanitizedEmail && !isValidEmail(sanitizedEmail)) {
+                res.status(400).json({
+                    success: false,
+                    message: 'Please provide a valid email address'
+                } as AuthResponse);
+                return;
+            }
+
             // Create user with plain text password (INSECURE!)
             const role = normalizeUserRole(req.body?.role);
             const userRole: UserRole = validRoles.includes(role as UserRole) ? role : 'employee';
@@ -67,18 +109,22 @@ export class AuthController {
                 return;
             }
 
-            const user = await UserModel.create(username, password, userRole, userRole === 'super_admin' ? null : department);
+            const user = await UserModel.create(
+                username,
+                password,
+                userRole,
+                userRole === 'super_admin' ? null : department,
+                null,
+                full_name ? String(full_name).trim() : null,
+                sanitizedEmail,
+                phone ? String(phone).trim() : null,
+                'internal',
+                'active',
+                []
+            );
 
             // Return user data without password
-            const userResponse: UserResponse = {
-                id: user.id,
-                username: user.username,
-                role: user.role,
-                department: user.department,
-                station_id: user.station_id,
-                created_at: user.created_at,
-                updated_at: user.updated_at
-            };
+            const userResponse: UserResponse = AuthController.toUserResponse(user);
 
             // Generate real JWT token
             const jwtSecret = process.env.JWT_SECRET;
@@ -149,16 +195,16 @@ export class AuthController {
                 return;
             }
 
+            if (user.status !== 'active') {
+                res.status(403).json({
+                    success: false,
+                    message: 'Your account is inactive. Please contact the administrator.'
+                } as AuthResponse);
+                return;
+            }
+
             // Return user data without password
-            const userResponse: UserResponse = {
-                id: user.id,
-                username: user.username,
-                role: user.role,
-                department: user.department,
-                station_id: user.station_id,
-                created_at: user.created_at,
-                updated_at: user.updated_at
-            };
+            const userResponse: UserResponse = AuthController.toUserResponse(user);
 
             // Generate real JWT token
             const jwtSecret = process.env.JWT_SECRET;
@@ -209,15 +255,7 @@ export class AuthController {
             }
 
             // Return user data without password
-            const userResponse: UserResponse = {
-                id: user.id,
-                username: user.username,
-                role: user.role,
-                department: user.department,
-                station_id: user.station_id,
-                created_at: user.created_at,
-                updated_at: user.updated_at
-            };
+            const userResponse: UserResponse = AuthController.toUserResponse(user);
 
             res.status(200).json({
                 success: true,
@@ -247,7 +285,18 @@ export class AuthController {
     // Create a new user (admin only)
     static async createUser(req: AuthRequest, res: Response): Promise<void> {
         try {
-            const { username, password, role, department } = req.body;
+            const {
+                username,
+                password,
+                role,
+                department,
+                full_name,
+                email,
+                phone,
+                user_type,
+                status,
+                station_codes,
+            } = req.body;
 
             if (!username || !password) {
                 res.status(400).json({ success: false, message: 'Username and password are required' });
@@ -262,39 +311,107 @@ export class AuthController {
                 return;
             }
 
-            const userRole: UserRole = validRoles.includes(role) ? role : 'employee';
-            const normalizedDepartment = normalizeDepartment(department);
+            const userType = normalizeUserType(user_type);
+            const userStatus = normalizeUserStatus(status);
+            const fullName = full_name ? String(full_name).trim() : null;
+            const userEmail = email ? String(email).trim().toLowerCase() : null;
+            const userPhone = phone ? String(phone).trim() : null;
+            const stationCodes = Array.isArray(station_codes)
+                ? Array.from(new Set(station_codes.map((code: unknown) => String(code || '').trim()).filter((code: string) => code.length > 0)))
+                : [];
 
-            if (userRole !== 'super_admin' && !normalizedDepartment) {
-                res.status(400).json({
-                    success: false,
-                    message: 'Department is required for non-super-admin users'
-                });
+            if (userEmail && !isValidEmail(userEmail)) {
+                res.status(400).json({ success: false, message: 'Please provide a valid email address' });
                 return;
+            }
+
+            let userRole: UserRole = validRoles.includes(role) ? role : 'employee';
+            let normalizedDepartment = normalizeDepartment(department);
+
+            if (userType === 'external') {
+                userRole = 'employee';
+                normalizedDepartment = null;
+
+                if (stationCodes.length === 0) {
+                    res.status(400).json({
+                        success: false,
+                        message: 'At least one station is required for external users'
+                    });
+                    return;
+                }
+            } else {
+                if (userRole !== 'super_admin' && !normalizedDepartment) {
+                    res.status(400).json({
+                        success: false,
+                        message: 'Department is required for non-super-admin users'
+                    });
+                    return;
+                }
             }
 
             const user = await UserModel.create(
                 username,
                 password,
                 userRole,
-                userRole === 'super_admin' ? null : normalizedDepartment
+                userRole === 'super_admin' ? null : normalizedDepartment,
+                null,
+                fullName,
+                userEmail,
+                userPhone,
+                userType,
+                userStatus,
+                stationCodes
             );
-            const userResponse: UserResponse = {
-                id: user.id,
-                username: user.username,
-                role: user.role,
-                department: user.department,
-                station_id: user.station_id,
-                created_at: user.created_at,
-                updated_at: user.updated_at,
-            };
+            const userResponse: UserResponse = AuthController.toUserResponse(user);
             res.status(201).json({ success: true, message: 'User created successfully', user: userResponse });
         } catch (error: any) {
             if (error.message === 'Username already exists') {
                 res.status(409).json({ success: false, message: 'Username already exists' });
                 return;
             }
+
+            if (error.code === '23505' && typeof error?.constraint === 'string' && error.constraint.includes('email')) {
+                res.status(409).json({ success: false, message: 'Email already exists' });
+                return;
+            }
+
             console.error('Create user error:', error);
+            res.status(500).json({ success: false, message: 'Internal server error' });
+        }
+    }
+
+    // Update user status (admin only)
+    static async updateUserStatus(req: AuthRequest, res: Response): Promise<void> {
+        try {
+            const { id } = req.params;
+            const { status } = req.body || {};
+
+            const rawStatus = String(status || '').trim().toLowerCase();
+            if (!validStatuses.includes(rawStatus as UserStatus)) {
+                res.status(400).json({ success: false, message: 'Valid status is required (active or inactive)' });
+                return;
+            }
+
+            const normalizedStatus = rawStatus as UserStatus;
+
+            if (req.user?.id === id && normalizedStatus === 'inactive') {
+                res.status(400).json({ success: false, message: 'You cannot deactivate your own account' });
+                return;
+            }
+
+            const updatedUser = await UserModel.updateStatus(id, normalizedStatus);
+            if (!updatedUser) {
+                res.status(404).json({ success: false, message: 'User not found' });
+                return;
+            }
+
+            res.status(200).json({
+                success: true,
+                message: 'User status updated successfully',
+                user: AuthController.toUserResponse(updatedUser),
+            });
+        } catch (error) {
+            console.error('Update user status error:', error);
             res.status(500).json({ success: false, message: 'Internal server error' });
         }
     }

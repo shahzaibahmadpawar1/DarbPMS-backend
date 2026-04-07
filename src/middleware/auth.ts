@@ -61,7 +61,9 @@ const hydrateUserFromDb = async (req: AuthRequest): Promise<boolean> => {
         id: user.id,
         username: user.username,
         role: user.role,
-        department: user.department
+        department: user.department,
+        user_type: user.user_type,
+        status: user.status,
     };
 
     return true;
@@ -126,7 +128,9 @@ export const authenticateToken = (
             id: decoded.id,
             username: decoded.username,
             role: normalizeUserRole(decoded.role),
-            department: decoded.department
+            department: decoded.department,
+            user_type: decoded.user_type,
+            status: decoded.status,
         };
 
         next();
@@ -256,8 +260,8 @@ export const requireStationDepartmentAccess = (
             }
 
             const stationScope = await resolveStationIdentifier(String(stationCode));
-            if (!stationScope || !stationScope.department) {
-                res.status(403).json({ success: false, message: 'Station is outside allowed department scope' });
+            if (!stationScope) {
+                res.status(403).json({ success: false, message: 'Station is outside allowed scope' });
                 return;
             }
 
@@ -267,6 +271,22 @@ export const requireStationDepartmentAccess = (
             }
             if (bodyStationCode) {
                 (req.body as any)[bodyField] = stationScope.stationCode;
+            }
+
+            if (req.user.user_type === 'external') {
+                const allowedStations = await UserModel.getStationCodesByUserId(req.user.id);
+                if (!allowedStations.includes(stationScope.stationCode)) {
+                    res.status(403).json({ success: false, message: 'Station is outside your assigned scope' });
+                    return;
+                }
+
+                next();
+                return;
+            }
+
+            if (!stationScope.department) {
+                res.status(403).json({ success: false, message: 'Station is outside allowed department scope' });
+                return;
             }
 
             if (req.user.department !== stationScope.department) {

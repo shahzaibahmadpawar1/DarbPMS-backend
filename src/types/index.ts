@@ -1,6 +1,8 @@
 import { Request } from 'express';
 
 export type Department = 'investment' | 'franchise';
+export type UserType = 'internal' | 'external';
+export type UserStatus = 'active' | 'inactive';
 
 // User roles
 export type UserRole = 'super_admin' | 'department_manager' | 'supervisor' | 'employee';
@@ -13,6 +15,12 @@ export interface User {
     role: UserRole;
     department: Department | null;
     station_id: string | null;
+    full_name: string | null;
+    email: string | null;
+    phone: string | null;
+    user_type: UserType;
+    status: UserStatus;
+    station_codes?: string[];
     created_at: Date;
     updated_at: Date;
 }
@@ -24,6 +32,12 @@ export interface UserResponse {
     role: UserRole;
     department: Department | null;
     station_id: string | null;
+    full_name: string | null;
+    email: string | null;
+    phone: string | null;
+    user_type: UserType;
+    status: UserStatus;
+    station_codes?: string[];
     created_at: Date;
     updated_at: Date;
 }
@@ -32,6 +46,9 @@ export interface UserResponse {
 export interface RegisterRequest {
     username: string;
     password: string;
+    full_name?: string;
+    email?: string;
+    phone?: string;
 }
 
 // Request body for login
@@ -55,6 +72,8 @@ export interface AuthRequest extends Request {
         username: string;
         role: UserRole;
         department: Department | null;
+        user_type?: UserType;
+        status?: UserStatus;
     };
 }
 
@@ -64,4 +83,6 @@ export interface JWTPayload {
     username: string;
     role: UserRole;
     department: Department | null;
+    user_type?: UserType;
+    status?: UserStatus;
 }
