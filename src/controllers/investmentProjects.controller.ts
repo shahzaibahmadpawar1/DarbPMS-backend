@@ -1,6 +1,6 @@
 import { Request, Response } from 'express';
 import pool from '../config/database';
-import { createWorkflowTaskForProject } from './workflowTasks.controller';
+import { createInitialReviewTaskForProject } from './workflowTasks.controller';
 import { deriveAction, recordWorkflowTransition } from '../utils/workflow';
 import { isSchemaCompatibilityError } from '../utils/dbErrors';
 
@@ -124,6 +124,11 @@ export const createInvestmentProject = async (req: Request, res: Response): Prom
                 stationCode, userId,
             ]
         );
+
+        if (userId) {
+            await createInitialReviewTaskForProject(result.rows[0].id, userId);
+        }
+
         res.status(201).json({ message: 'Investment project created successfully', data: result.rows[0] });
     } catch (error: any) {
         console.error('Error creating investment project:', error);
@@ -288,9 +293,14 @@ export const updateInvestmentProjectReviewStatus = async (req: Request, res: Res
         const userId = (req as any).user?.id;
         const userRole = (req as any).user?.role;
 
+        if (userRole !== 'super_admin') {
+            res.status(403).json({ error: 'Only super admin can apply project review actions from this endpoint' });
+            return;
+        }
+
         const normalizedAction = deriveAction(action || reviewStatus);
-        if (!normalizedAction) {
-            res.status(400).json({ error: 'A valid action is required: Approve, Contract, Documents or Reject' });
+        if (!(normalizedAction === 'Approve' || normalizedAction === 'Reject')) {
+            res.status(400).json({ error: 'Only Approve or Reject actions are allowed on this endpoint' });
             return;
         }
 
@@ -302,11 +312,8 @@ export const updateInvestmentProjectReviewStatus = async (req: Request, res: Res
 
         if (normalizedAction === 'Approve') {
             nextReviewStatus = 'Approved';
-        } else if (normalizedAction === 'Reject') {
-            nextReviewStatus = 'Rejected';
         } else {
-            nextReviewStatus = 'Validated';
-            workflowPath = normalizedAction === 'Contract' ? 'contract' : 'documents';
+            nextReviewStatus = 'Rejected';
         }
 
         const commentField = userRole === 'super_admin' ? 'ceo_comment' : 'pm_comment';
@@ -331,10 +338,6 @@ export const updateInvestmentProjectReviewStatus = async (req: Request, res: Res
         if (nextReviewStatus === 'Approved') {
             const project = updateResult.rows[0];
             await upsertStationFromProject(project, userId);
-        }
-
-        if (workflowPath && userId) {
-            await createWorkflowTaskForProject(id, workflowPath, userId);
         }
 
         await recordWorkflowTransition({

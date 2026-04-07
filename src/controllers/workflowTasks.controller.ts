@@ -85,6 +85,7 @@ export const getWorkflowTasks = async (req: AuthRequest, res: Response): Promise
                 p.project_code,
                 p.review_status,
                 p.department_type,
+                p.workflow_path,
                 p.city,
                 au.username AS assigned_to_username,
                 aby.username AS assigned_by_username
@@ -194,7 +195,7 @@ export const assignWorkflowTask = async (req: AuthRequest, res: Response): Promi
             return;
         }
 
-        const assignee = await pool.query('SELECT id, department FROM users WHERE id = $1 LIMIT 1', [assignedToUserId]);
+        const assignee = await pool.query('SELECT id, role, department FROM users WHERE id = $1 LIMIT 1', [assignedToUserId]);
         if (!assignee.rows.length) {
             res.status(404).json({ error: 'Assignee not found' });
             return;
@@ -206,7 +207,13 @@ export const assignWorkflowTask = async (req: AuthRequest, res: Response): Promi
             return;
         }
 
-        const taskLookup = await pool.query('SELECT status, assigned_to FROM project_workflow_tasks WHERE id = $1 LIMIT 1', [id]);
+        const taskLookup = await pool.query(`
+            SELECT t.status, t.assigned_to, p.workflow_path
+            FROM project_workflow_tasks t
+            JOIN investment_projects p ON p.id = t.investment_project_id
+            WHERE t.id = $1
+            LIMIT 1
+        `, [id]);
         if (!taskLookup.rows.length) {
             res.status(404).json({ error: 'Task not found' });
             return;
@@ -215,6 +222,16 @@ export const assignWorkflowTask = async (req: AuthRequest, res: Response): Promi
         const task = taskLookup.rows[0];
         if (task.status !== 'manager_queue' || task.assigned_to) {
             res.status(409).json({ error: 'Task is already assigned and cannot be reassigned' });
+            return;
+        }
+
+        if (normalizeDepartment(assignee.rows[0].department) !== resolvedTargetDepartment) {
+            res.status(400).json({ error: 'Assignee department must match target department' });
+            return;
+        }
+
+        if (actorRole === 'super_admin' && task.workflow_path && assignee.rows[0].role !== 'department_manager') {
+            res.status(403).json({ error: 'For contract/document branch, super admin can assign only to department managers' });
             return;
         }
 
@@ -318,7 +335,13 @@ export const submitEmployeeAttachment = async (req: AuthRequest, res: Response):
             return;
         }
 
-        const taskLookup = await pool.query('SELECT * FROM project_workflow_tasks WHERE id = $1 LIMIT 1', [id]);
+        const taskLookup = await pool.query(`
+            SELECT t.*, p.workflow_path
+            FROM project_workflow_tasks t
+            JOIN investment_projects p ON p.id = t.investment_project_id
+            WHERE t.id = $1
+            LIMIT 1
+        `, [id]);
         if (!taskLookup.rows.length) {
             res.status(404).json({ error: 'Task not found' });
             return;
@@ -341,32 +364,137 @@ export const submitEmployeeAttachment = async (req: AuthRequest, res: Response):
             return;
         }
 
+        const nextStatus = task.workflow_path ? 'manager_submitted' : 'employee_submitted';
+
         const result = await pool.query(`
             UPDATE project_workflow_tasks
             SET employee_attachment_url = $1,
                 employee_note = $2,
-                status = 'under_super_admin_review',
+                status = $3,
                 updated_at = CURRENT_TIMESTAMP
-            WHERE id = $3
+            WHERE id = $4
             RETURNING *
-        `, [resolvedEmployeeAttachment, note || null, id]);
+        `, [resolvedEmployeeAttachment, note || null, nextStatus, id]);
 
         await recordWorkflowTransition({
             entityType: 'workflow_task',
             entityId: id,
             oldState,
-            newState: 'under_super_admin_review',
+            newState: nextStatus,
             changedBy: userId,
             note: note || 'Employee submitted attachment',
             metadata: {
                 attachmentUrl: resolvedEmployeeAttachment,
                 usedManagerAttachmentOnly: !normalizedAttachmentUrl && Boolean(task.manager_attachment_url),
+                branchWorkflow: Boolean(task.workflow_path),
             },
         });
 
-        res.status(200).json({ message: 'Employee submission sent for Super Admin review', data: result.rows[0] });
+        res.status(200).json({
+            message: nextStatus === 'manager_submitted'
+                ? 'Branch submission completed and awaiting Super Admin review'
+                : 'Submission sent back to department manager for validation',
+            data: result.rows[0],
+        });
     } catch (error: any) {
         res.status(500).json({ error: 'Failed to submit employee attachment', details: error.message });
+    }
+};
+
+export const managerValidateWorkflowTask = async (req: AuthRequest, res: Response): Promise<void> => {
+    try {
+        await ensureWorkflowSchema();
+
+        const { id } = req.params;
+        const { comment } = req.body as { comment?: string };
+        const userId = req.user?.id;
+        const userRole = req.user?.role;
+
+        if (!userId || !userRole) {
+            res.status(401).json({ error: 'Unauthorized' });
+            return;
+        }
+
+        if (!(userRole === 'department_manager' || userRole === 'super_admin')) {
+            res.status(403).json({ error: 'Only department manager or super admin can validate tasks' });
+            return;
+        }
+
+        const taskLookup = await pool.query(`
+            SELECT t.*, p.workflow_path, p.review_status
+            FROM project_workflow_tasks t
+            JOIN investment_projects p ON p.id = t.investment_project_id
+            WHERE t.id = $1
+            LIMIT 1
+        `, [id]);
+
+        if (!taskLookup.rows.length) {
+            res.status(404).json({ error: 'Task not found' });
+            return;
+        }
+
+        const task = taskLookup.rows[0];
+        if (task.workflow_path) {
+            res.status(409).json({ error: 'Manager validation is only allowed for initial review stage' });
+            return;
+        }
+
+        if (!(task.status === 'manager_queue' || task.status === 'employee_submitted')) {
+            res.status(409).json({ error: 'Task must be in manager queue or employee submitted state before validation' });
+            return;
+        }
+
+        const oldTaskState = task.status;
+
+        const taskResult = await pool.query(`
+            UPDATE project_workflow_tasks
+            SET status = 'under_super_admin_review',
+                manager_note = COALESCE($1, manager_note),
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = $2
+            RETURNING *
+        `, [comment || null, id]);
+
+        await pool.query(`
+            UPDATE investment_projects
+            SET review_status = 'Validated',
+                pm_comment = COALESCE($1, pm_comment),
+                updated_by = $2,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = $3
+        `, [comment || null, userId, task.investment_project_id]);
+
+        await recordWorkflowTransition({
+            entityType: 'workflow_task',
+            entityId: id,
+            oldState: oldTaskState,
+            newState: 'under_super_admin_review',
+            changedBy: userId,
+            note: comment || 'Department manager validated task',
+            metadata: {
+                actorRole: userRole,
+            },
+        });
+
+        await recordWorkflowTransition({
+            entityType: 'investment_project',
+            entityId: task.investment_project_id,
+            oldState: task.review_status,
+            newState: 'Validated',
+            changedBy: userId,
+            note: comment || 'Project validated by department manager',
+            metadata: {
+                workflowTaskId: id,
+                actorRole: userRole,
+            },
+        });
+
+        res.status(200).json({
+            message: 'Task validated and moved to super admin review',
+            data: taskResult.rows[0],
+        });
+    } catch (error: any) {
+        res.status(500).json({ error: 'Failed to validate workflow task', details: error.message });
     }
 };
 
@@ -375,7 +503,12 @@ export const reviewWorkflowTask = async (req: AuthRequest, res: Response): Promi
         await ensureWorkflowSchema();
 
         const { id } = req.params;
-        const { decision, comment } = req.body as { decision?: string; comment?: string };
+        const { decision, comment, assignedToUserId, targetDepartment } = req.body as {
+            decision?: string;
+            comment?: string;
+            assignedToUserId?: string;
+            targetDepartment?: string;
+        };
         const userRole = req.user?.role;
         const userId = req.user?.id;
 
@@ -385,8 +518,8 @@ export const reviewWorkflowTask = async (req: AuthRequest, res: Response): Promi
         }
 
         const normalizedDecision = String(decision || '').trim().toLowerCase();
-        if (!(normalizedDecision === 'approved' || normalizedDecision === 'rejected')) {
-            res.status(400).json({ error: 'decision must be approved or rejected' });
+        if (!(normalizedDecision === 'approved' || normalizedDecision === 'rejected' || normalizedDecision === 'contract' || normalizedDecision === 'document' || normalizedDecision === 'documents')) {
+            res.status(400).json({ error: 'decision must be approved, rejected, contract, or document' });
             return;
         }
 
@@ -397,6 +530,86 @@ export const reviewWorkflowTask = async (req: AuthRequest, res: Response): Promi
         }
 
         const task = taskLookup.rows[0];
+        const oldTaskState = task.status;
+
+        if (normalizedDecision === 'contract' || normalizedDecision === 'document' || normalizedDecision === 'documents') {
+            const normalizedBranch = normalizedDecision === 'contract' ? 'contract' : 'documents';
+            if (!assignedToUserId) {
+                res.status(400).json({ error: 'assignedToUserId is required for contract/document routing' });
+                return;
+            }
+
+            const assignee = await pool.query('SELECT id, role, department FROM users WHERE id = $1 LIMIT 1', [assignedToUserId]);
+            if (!assignee.rows.length) {
+                res.status(404).json({ error: 'Assignee not found' });
+                return;
+            }
+
+            const resolvedTargetDepartment = normalizeDepartment(targetDepartment) || normalizeDepartment(assignee.rows[0].department);
+            if (!resolvedTargetDepartment) {
+                res.status(400).json({ error: 'A valid target department is required' });
+                return;
+            }
+
+            if (assignee.rows[0].role !== 'department_manager') {
+                res.status(403).json({ error: 'Branch tasks can only be assigned to department managers' });
+                return;
+            }
+
+            if (normalizeDepartment(assignee.rows[0].department) !== resolvedTargetDepartment) {
+                res.status(400).json({ error: 'Assignee department must match target department' });
+                return;
+            }
+
+            const updatedTask = await pool.query(`
+                UPDATE project_workflow_tasks
+                SET status = 'assigned',
+                    flow_type = $1,
+                    assigned_to = $2,
+                    assigned_by = $3,
+                    target_department = $4,
+                    super_admin_comment = $5,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id = $6
+                RETURNING *
+            `, [normalizedBranch, assignedToUserId, userId, resolvedTargetDepartment, comment || null, id]);
+
+            await pool.query(`
+                UPDATE investment_projects
+                SET review_status = 'Validated',
+                    workflow_path = $1,
+                    ceo_comment = $2,
+                    updated_by = $3,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id = $4
+            `, [normalizedBranch, comment || null, userId, task.investment_project_id]);
+
+            await recordWorkflowTransition({
+                entityType: 'workflow_task',
+                entityId: id,
+                oldState: oldTaskState,
+                newState: 'assigned',
+                changedBy: userId,
+                note: comment || `Super admin routed task to ${normalizedBranch} branch`,
+                metadata: {
+                    branch: normalizedBranch,
+                    assignedToUserId,
+                    targetDepartment: resolvedTargetDepartment,
+                },
+            });
+
+            res.status(200).json({
+                message: `Task routed to ${normalizedBranch} branch and assigned to manager`,
+                data: updatedTask.rows[0],
+            });
+            return;
+        }
+
+        if (!(task.status === 'manager_submitted' || task.status === 'under_super_admin_review')) {
+            res.status(409).json({ error: 'Task must be submitted by a manager or be under super admin review before final decision' });
+            return;
+        }
+
         if (!task.manager_attachment_url && !task.employee_attachment_url) {
             res.status(400).json({
                 error: 'Review cannot proceed without an attachment. At least one manager or employee file is required.',
@@ -404,9 +617,7 @@ export const reviewWorkflowTask = async (req: AuthRequest, res: Response): Promi
             return;
         }
 
-        const oldTaskState = task.status;
         const taskStatus = normalizedDecision as 'approved' | 'rejected';
-
         const updatedTask = await pool.query(`
             UPDATE project_workflow_tasks
             SET status = $1,
@@ -457,6 +668,218 @@ export const reviewWorkflowTask = async (req: AuthRequest, res: Response): Promi
         });
     } catch (error: any) {
         res.status(500).json({ error: 'Failed to review workflow task', details: error.message });
+    }
+};
+
+export const getWorkflowTaskHistory = async (req: AuthRequest, res: Response): Promise<void> => {
+    try {
+        await ensureWorkflowSchema();
+
+        const { id } = req.params;
+        const userId = req.user?.id;
+        const userRole = req.user?.role;
+
+        if (!userId || !userRole) {
+            res.status(401).json({ error: 'Unauthorized' });
+            return;
+        }
+
+        const taskResult = await pool.query(`
+            SELECT
+                t.*,
+                p.project_name,
+                p.project_code,
+                p.review_status,
+                p.department_type,
+                p.workflow_path,
+                au.username AS assigned_to_username,
+                aby.username AS assigned_by_username
+            FROM project_workflow_tasks t
+            JOIN investment_projects p ON p.id = t.investment_project_id
+            LEFT JOIN users au ON au.id = t.assigned_to
+            LEFT JOIN users aby ON aby.id = t.assigned_by
+            WHERE t.id = $1
+            LIMIT 1
+        `, [id]);
+
+        if (!taskResult.rows.length) {
+            res.status(404).json({ error: 'Task not found' });
+            return;
+        }
+
+        const task = taskResult.rows[0];
+
+        const auditResult = await pool.query(`
+            SELECT
+                a.id,
+                a.entity_type,
+                a.entity_id,
+                a.old_state,
+                a.new_state,
+                a.note,
+                a.metadata,
+                a.created_at,
+                u.username AS changed_by_username,
+                u.role AS changed_by_role
+            FROM workflow_transition_audit a
+            LEFT JOIN users u ON u.id = a.changed_by
+            WHERE (a.entity_type = 'workflow_task' AND a.entity_id = $1)
+               OR (a.entity_type = 'investment_project' AND a.entity_id = $2)
+            ORDER BY a.created_at ASC
+        `, [task.id, task.investment_project_id]);
+
+        res.status(200).json({
+            data: {
+                task,
+                history: auditResult.rows,
+            },
+        });
+    } catch (error: any) {
+        res.status(500).json({ error: 'Failed to fetch workflow task history', details: error.message });
+    }
+};
+
+export const createInitialReviewTaskForProject = async (
+    projectId: string,
+    actorId: string,
+): Promise<void> => {
+    await ensureWorkflowSchema();
+
+    const projectResult = await pool.query(
+        'SELECT id, project_name, project_code, department_type FROM investment_projects WHERE id = $1 LIMIT 1',
+        [projectId],
+    );
+    if (!projectResult.rows.length) {
+        return;
+    }
+
+    const existing = await pool.query(
+        'SELECT id FROM project_workflow_tasks WHERE investment_project_id = $1 LIMIT 1',
+        [projectId],
+    );
+    if (existing.rows.length) {
+        return;
+    }
+
+    const project = projectResult.rows[0];
+    await pool.query(`
+        INSERT INTO project_workflow_tasks (
+            investment_project_id,
+            title,
+            description,
+            flow_type,
+            origin_department,
+            target_department,
+            created_by,
+            assigned_by
+        )
+        VALUES ($1, $2, $3, $4, $5, $5, $6, $6)
+    `, [
+        project.id,
+        `Initial Review - ${project.project_name}`,
+        `Initial manager review created for project ${project.project_code}.`,
+        'documents',
+        normalizeDepartment(project.department_type) || 'investment',
+        actorId,
+    ]);
+
+    const insertedTask = await pool.query(
+        'SELECT id FROM project_workflow_tasks WHERE investment_project_id = $1 ORDER BY created_at DESC LIMIT 1',
+        [project.id],
+    );
+
+    if (insertedTask.rows.length) {
+        await recordWorkflowTransition({
+            entityType: 'workflow_task',
+            entityId: insertedTask.rows[0].id,
+            oldState: null,
+            newState: 'manager_queue',
+            changedBy: actorId,
+            note: 'Initial review task auto-created',
+            metadata: {
+                projectId,
+                stage: 'initial_review',
+            },
+        });
+    }
+};
+
+export const submitManagerAttachment = async (req: AuthRequest, res: Response): Promise<void> => {
+    try {
+        await ensureWorkflowSchema();
+
+        const { id } = req.params;
+        const { attachmentUrl, note } = req.body as { attachmentUrl?: string; note?: string };
+        const userId = req.user?.id;
+        const userRole = req.user?.role;
+
+        if (!userId || !userRole) {
+            res.status(401).json({ error: 'Unauthorized' });
+            return;
+        }
+
+        const normalizedAttachmentUrl = String(attachmentUrl || '').trim();
+        if (normalizedAttachmentUrl && !isValidHttpUrl(normalizedAttachmentUrl)) {
+            res.status(400).json({ error: 'attachmentUrl must be a valid http/https URL' });
+            return;
+        }
+
+        const taskLookup = await pool.query(`
+            SELECT t.*, p.review_status, p.workflow_path
+            FROM project_workflow_tasks t
+            JOIN investment_projects p ON p.id = t.investment_project_id
+            WHERE t.id = $1
+            LIMIT 1
+        `, [id]);
+
+        if (!taskLookup.rows.length) {
+            res.status(404).json({ error: 'Task not found' });
+            return;
+        }
+
+        const task = taskLookup.rows[0];
+        if (task.status !== 'assigned') {
+            res.status(409).json({ error: 'Branch submission can only be completed from assigned status' });
+            return;
+        }
+
+        const canSubmit = userRole === 'super_admin' || task.assigned_to === userId;
+        if (!canSubmit) {
+            res.status(403).json({ error: 'Only the assigned manager can submit this branch task' });
+            return;
+        }
+
+        if (!normalizedAttachmentUrl) {
+            res.status(400).json({ error: 'attachmentUrl is required' });
+            return;
+        }
+
+        const updatedTask = await pool.query(`
+            UPDATE project_workflow_tasks
+            SET manager_attachment_url = $1,
+                manager_note = $2,
+                status = 'under_super_admin_review',
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = $3
+            RETURNING *
+        `, [normalizedAttachmentUrl, note || null, id]);
+
+        await recordWorkflowTransition({
+            entityType: 'workflow_task',
+            entityId: id,
+            oldState: task.status,
+            newState: 'under_super_admin_review',
+            changedBy: userId,
+            note: note || 'Manager submitted branch attachment',
+            metadata: {
+                attachmentUrl: normalizedAttachmentUrl,
+                workflowPath: task.workflow_path,
+            },
+        });
+
+        res.status(200).json({ message: 'Branch submission sent to Super Admin review', data: updatedTask.rows[0] });
+    } catch (error: any) {
+        res.status(500).json({ error: 'Failed to submit manager attachment', details: error.message });
     }
 };
 

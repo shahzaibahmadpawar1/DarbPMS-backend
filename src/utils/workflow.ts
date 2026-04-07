@@ -1,7 +1,7 @@
 import pool from '../config/database';
 
 export type WorkflowAction = 'Approve' | 'Contract' | 'Documents' | 'Reject';
-export type WorkflowTaskStatus = 'manager_queue' | 'assigned' | 'employee_submitted' | 'under_super_admin_review' | 'approved' | 'rejected';
+export type WorkflowTaskStatus = 'manager_queue' | 'assigned' | 'employee_submitted' | 'manager_submitted' | 'under_super_admin_review' | 'approved' | 'rejected';
 export type WorkflowTaskFlowType = 'contract' | 'documents';
 export type WorkflowAuditEntity = 'investment_project' | 'workflow_task';
 
@@ -26,7 +26,7 @@ export const ensureWorkflowSchema = async (): Promise<void> => {
             description TEXT,
             flow_type VARCHAR(20) NOT NULL CHECK (flow_type IN ('contract', 'documents')),
             status VARCHAR(40) NOT NULL DEFAULT 'manager_queue'
-                CHECK (status IN ('manager_queue', 'assigned', 'employee_submitted', 'under_super_admin_review', 'approved', 'rejected')),
+                CHECK (status IN ('manager_queue', 'assigned', 'employee_submitted', 'manager_submitted', 'under_super_admin_review', 'approved', 'rejected')),
             origin_department VARCHAR(20) NOT NULL CHECK (origin_department IN ('investment', 'franchise')),
             target_department VARCHAR(20) NOT NULL CHECK (target_department IN ('investment', 'franchise')),
             assigned_to UUID REFERENCES users(id) ON DELETE SET NULL,
