@@ -69,8 +69,30 @@ const normalizeDepartment = (value: unknown): 'investment' | 'franchise' | null 
     return null;
 };
 
-const normalizeDashboardBucket = (value: unknown): 'total-projects' | 'pending-review' | 'validated' | 'approved' | 'new-projects' | 'contracted' | 'documented' => {
+const normalizeDashboardBucket = (
+    value: unknown,
+):
+    | 'total-stations'
+    | 'under-execution'
+    | 'not-started'
+    | 'operational-stations'
+    | 'opening-soon'
+    | 'new-stations'
+    | 'total-projects'
+    | 'pending-review'
+    | 'validated'
+    | 'approved'
+    | 'new-projects'
+    | 'contracted'
+    | 'documented'
+    | 'rejected' => {
     const normalized = String(value || 'total-projects').trim().toLowerCase();
+    if (normalized === 'total-stations' || normalized === 'stations') return 'total-stations';
+    if (normalized === 'under-execution' || normalized === 'execution') return 'under-execution';
+    if (normalized === 'not-started' || normalized === 'not-start') return 'not-started';
+    if (normalized === 'operational-stations' || normalized === 'operational') return 'operational-stations';
+    if (normalized === 'opening-soon' || normalized === 'opening') return 'opening-soon';
+    if (normalized === 'new-stations' || normalized === 'new-station') return 'new-stations';
     if (['total-projects', 'total', 'all'].includes(normalized)) return 'total-projects';
     if (normalized === 'pending-review' || normalized === 'pending') return 'pending-review';
     if (normalized === 'validated') return 'validated';
@@ -78,6 +100,7 @@ const normalizeDashboardBucket = (value: unknown): 'total-projects' | 'pending-r
     if (normalized === 'new-projects' || normalized === 'new-project') return 'new-projects';
     if (normalized === 'contracted') return 'contracted';
     if (normalized === 'documented' || normalized === 'documents') return 'documented';
+    if (normalized === 'rejected' || normalized === 'reject') return 'rejected';
     return 'total-projects';
 };
 
@@ -121,6 +144,62 @@ const buildWorkflowScopeQuery = (departmentType: string | null) => {
 };
 
 const buildDashboardStationQuery = (bucket: ReturnType<typeof normalizeDashboardBucket>, departmentType: string | null) => {
+    const stationBuckets = new Set<ReturnType<typeof normalizeDashboardBucket>>([
+        'total-stations',
+        'under-execution',
+        'not-started',
+        'operational-stations',
+        'opening-soon',
+        'new-stations',
+    ]);
+
+    if (stationBuckets.has(bucket)) {
+        const params: unknown[] = [];
+        const whereClauses: string[] = [];
+
+        if (departmentType) {
+            params.push(departmentType);
+            whereClauses.push(`(CASE WHEN lower(station_type_code) = 'frenchise' THEN 'franchise' ELSE lower(station_type_code) END) = $${params.length}`);
+        }
+
+        if (bucket === 'under-execution') {
+            whereClauses.push(`(station_status_code ILIKE '%execution%' OR station_status_code ILIKE '%progress%')`);
+        }
+
+        if (bucket === 'not-started') {
+            whereClauses.push(`(station_status_code ILIKE '%not started%' OR station_status_code IS NULL)`);
+        }
+
+        if (bucket === 'operational-stations') {
+            whereClauses.push(`(station_status_code ILIKE '%operation%' OR station_status_code ILIKE '%active%')`);
+        }
+
+        if (bucket === 'opening-soon') {
+            whereClauses.push(`(station_status_code ILIKE '%soon%' OR station_status_code ILIKE '%opening%')`);
+        }
+
+        if (bucket === 'new-stations') {
+            whereClauses.push(`created_at >= date_trunc('month', CURRENT_DATE)`);
+        }
+
+        return {
+            text: `
+                SELECT
+                    id::text AS id,
+                    station_code,
+                    station_name,
+                    city,
+                    station_type_code,
+                    COALESCE(station_status_code, 'Not Started') AS station_status_code,
+                    created_at AS project_created_at
+                FROM station_information
+                ${whereClauses.length ? `WHERE ${whereClauses.join(' AND ')}` : ''}
+                ORDER BY created_at DESC
+            `,
+            params,
+        };
+    }
+
     const filterClause = departmentType ? 'WHERE 1 = 1 AND p.department_type = $1' : 'WHERE 1 = 1';
     const params = departmentType ? [departmentType] : [];
     const bucketClause = (() => {
@@ -132,6 +211,8 @@ const buildDashboardStationQuery = (bucket: ReturnType<typeof normalizeDashboard
                 return "AND p.review_status = 'Validated'";
             case 'approved':
                 return "AND p.review_status = 'Approved'";
+            case 'rejected':
+                return "AND p.review_status = 'Rejected'";
             case 'contracted':
                 return `AND EXISTS (
                     SELECT 1
@@ -190,6 +271,7 @@ const buildDashboardStationQuery = (bucket: ReturnType<typeof normalizeDashboard
                     WHEN '${bucket}' = 'documented' THEN 'Documented'
                     WHEN '${bucket}' = 'validated' THEN 'Validated'
                     WHEN '${bucket}' = 'approved' THEN 'Approved'
+                    WHEN '${bucket}' = 'rejected' THEN 'Rejected'
                     WHEN '${bucket}' = 'pending-review' OR '${bucket}' = 'new-projects' THEN 'Pending Review'
                     ELSE COALESCE(s.station_status_code, bp.project_status, bp.review_status, 'Unknown')
                 END AS station_status_code,
