@@ -7,9 +7,23 @@ import { normalizeUserRole } from '../utils/roles';
 const validRoles: UserRole[] = ['super_admin', 'department_manager', 'supervisor', 'employee'];
 const validDepartments: Department[] = ['investment', 'franchise'];
 const validStatuses: UserStatus[] = ['active', 'inactive'];
+const emailNoiseRegex = /[\s\u200B-\u200D\uFEFF]+/g;
 
 const isValidEmail = (value: string): boolean => {
     return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
+};
+
+const normalizeEmail = (value: unknown): string | null => {
+    if (value === null || value === undefined) {
+        return null;
+    }
+
+    const normalized = String(value)
+        .trim()
+        .toLowerCase()
+        .replace(emailNoiseRegex, '');
+
+    return normalized || null;
 };
 
 const normalizeUserType = (value: unknown): UserType => {
@@ -87,7 +101,7 @@ export class AuthController {
                 return;
             }
 
-            const sanitizedEmail = email ? String(email).trim().toLowerCase() : null;
+            const sanitizedEmail = normalizeEmail(email);
             if (sanitizedEmail && !isValidEmail(sanitizedEmail)) {
                 res.status(400).json({
                     success: false,
@@ -463,8 +477,8 @@ export class AuthController {
                 : (existing.full_name ?? null);
 
             const userEmail = req.body?.email !== undefined
-                ? (String(req.body.email || '').trim().toLowerCase() || null)
-                : (existing.email ?? null);
+                ? normalizeEmail(req.body.email)
+                : normalizeEmail(existing.email);
 
             if (userEmail && !isValidEmail(userEmail)) {
                 res.status(400).json({ success: false, message: 'Please provide a valid email address' });
@@ -533,6 +547,26 @@ export class AuthController {
         } catch (error: any) {
             if (error.message === 'External user edits require database migration for station assignments') {
                 res.status(400).json({ success: false, message: error.message });
+                return;
+            }
+
+            if (error.code === '23514' && error?.constraint === 'users_email_format_check') {
+                res.status(400).json({ success: false, message: 'Please provide a valid email address' });
+                return;
+            }
+
+            if (error.code === '23514' && error?.constraint === 'users_department_required_for_non_super_admin') {
+                res.status(400).json({ success: false, message: 'Department is required for non-super-admin users' });
+                return;
+            }
+
+            if (error.code === '23514' && error?.constraint === 'users_status_check') {
+                res.status(400).json({ success: false, message: 'Invalid user status' });
+                return;
+            }
+
+            if (error.code === '23514' && error?.constraint === 'users_user_type_check') {
+                res.status(400).json({ success: false, message: 'Invalid user type' });
                 return;
             }
 
