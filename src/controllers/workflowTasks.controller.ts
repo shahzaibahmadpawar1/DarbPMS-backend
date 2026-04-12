@@ -544,6 +544,12 @@ export const managerValidateWorkflowTask = async (req: AuthRequest, res: Respons
             return;
         }
 
+        const hasAttachment = Boolean(task.attachment_url || task.employee_attachment_url || task.manager_attachment_url);
+        if (!hasAttachment) {
+            res.status(400).json({ error: 'One attachment is required before manager validation.' });
+            return;
+        }
+
         const oldTaskState = task.status;
 
         const taskResult = await pool.query(`
@@ -962,15 +968,11 @@ export const submitManagerAttachment = async (req: AuthRequest, res: Response): 
             UPDATE project_workflow_tasks
             SET manager_attachment_url = $1,
                 manager_note = $2,
-                attachment_url = $1,
-                attachment_note = $2,
-                attachment_uploaded_by = $3,
-                attachment_uploaded_at = CURRENT_TIMESTAMP,
                 status = 'under_super_admin_review',
                 updated_at = CURRENT_TIMESTAMP
-            WHERE id = $4
+            WHERE id = $3
             RETURNING *
-        `, [normalizedAttachmentUrl, note || null, userId, id]);
+        `, [normalizedAttachmentUrl, note || null, id]);
 
         await recordWorkflowTransition({
             entityType: 'workflow_task',
