@@ -4,11 +4,13 @@ import { AuthRequest } from '../types';
 import { ensureWorkflowSchema, WorkflowTaskFlowType, recordWorkflowTransition } from '../utils/workflow';
 import { isSchemaCompatibilityError } from '../utils/dbErrors';
 
-const normalizeDepartment = (value: unknown): 'investment' | 'franchise' | null => {
+const normalizeDepartment = (value: unknown): 'investment' | 'franchise' | 'project' | 'ceo' | null => {
     const normalized = String(value || '').trim().toLowerCase();
     if (!normalized) return null;
     if (normalized === 'investment') return 'investment';
     if (normalized === 'franchise' || normalized === 'frenchise') return 'franchise';
+    if (normalized === 'project') return 'project';
+    if (normalized === 'ceo') return 'ceo';
     return null;
 };
 
@@ -773,13 +775,14 @@ export const createInitialReviewTaskForProject = async (
             created_by,
             assigned_by
         )
-        VALUES ($1, $2, $3, $4, $5, $5, $6, $6)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $7)
     `, [
         project.id,
         `Initial Review - ${project.project_name}`,
         `Initial manager review created for project ${project.project_code}.`,
         'documents',
-        normalizeDepartment(project.department_type) || 'investment',
+        'project',
+        'project',
         actorId,
     ]);
 

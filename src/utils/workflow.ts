@@ -27,8 +27,8 @@ export const ensureWorkflowSchema = async (): Promise<void> => {
             flow_type VARCHAR(20) NOT NULL CHECK (flow_type IN ('contract', 'documents')),
             status VARCHAR(40) NOT NULL DEFAULT 'manager_queue'
                 CHECK (status IN ('manager_queue', 'assigned', 'employee_submitted', 'manager_submitted', 'under_super_admin_review', 'approved', 'rejected')),
-            origin_department VARCHAR(20) NOT NULL CHECK (origin_department IN ('investment', 'franchise')),
-            target_department VARCHAR(20) NOT NULL CHECK (target_department IN ('investment', 'franchise')),
+            origin_department VARCHAR(20) NOT NULL CHECK (origin_department IN ('investment', 'franchise', 'project', 'ceo')),
+            target_department VARCHAR(20) NOT NULL CHECK (target_department IN ('investment', 'franchise', 'project', 'ceo')),
             assigned_to UUID REFERENCES users(id) ON DELETE SET NULL,
             assigned_by UUID REFERENCES users(id) ON DELETE SET NULL,
             manager_attachment_url TEXT,
