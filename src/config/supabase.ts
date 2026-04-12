@@ -70,6 +70,7 @@ export const getAllowedMimeTypes = (): string[] => {
             'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
             'image/png',
             'image/jpeg',
+            'image/webp',
             'application/acad',
             'application/x-acad',
             'application/autocad_dwg',
@@ -88,7 +89,7 @@ export const getAllowedMimeTypes = (): string[] => {
 export const getAllowedFileExtensions = (): string[] => {
     const configured = process.env.ALLOWED_FILE_EXTENSIONS;
     if (!configured) {
-        return ['.pdf', '.doc', '.docx', '.jpg', '.jpeg', '.png', '.dwg'];
+        return ['.pdf', '.doc', '.docx', '.jpg', '.jpeg', '.png', '.webp', '.dwg'];
     }
 
     return configured

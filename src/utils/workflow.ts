@@ -72,6 +72,34 @@ export const ensureWorkflowSchema = async (): Promise<void> => {
         ADD COLUMN IF NOT EXISTS attachment_uploaded_at TIMESTAMP WITH TIME ZONE;
     `);
 
+    // Normalize legacy check constraints so project and all active departments are accepted.
+    await pool.query(`
+        ALTER TABLE project_workflow_tasks
+        DROP CONSTRAINT IF EXISTS project_workflow_tasks_origin_department_check;
+    `);
+    await pool.query(`
+        ALTER TABLE project_workflow_tasks
+        DROP CONSTRAINT IF EXISTS project_workflow_tasks_target_department_check;
+    `);
+    await pool.query(`
+        ALTER TABLE project_workflow_tasks
+        ADD CONSTRAINT project_workflow_tasks_origin_department_check
+        CHECK (origin_department IN (
+            'investment', 'franchise', 'it', 'project', 'finance', 'operation',
+            'maintanance', 'hr', 'realestate', 'procurement', 'quality', 'marketing',
+            'property_management', 'legal', 'government_relations', 'safety', 'ceo'
+        ));
+    `);
+    await pool.query(`
+        ALTER TABLE project_workflow_tasks
+        ADD CONSTRAINT project_workflow_tasks_target_department_check
+        CHECK (target_department IN (
+            'investment', 'franchise', 'it', 'project', 'finance', 'operation',
+            'maintanance', 'hr', 'realestate', 'procurement', 'quality', 'marketing',
+            'property_management', 'legal', 'government_relations', 'safety', 'ceo'
+        ));
+    `);
+
     await pool.query(`
         CREATE INDEX IF NOT EXISTS idx_workflow_tasks_project ON project_workflow_tasks(investment_project_id);
     `);
