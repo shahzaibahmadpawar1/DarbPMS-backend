@@ -147,6 +147,10 @@ export const createInvestmentProject = async (req: Request, res: Response): Prom
         const normalizedContractType = normalizeContractType(contractType);
 
         const userId = (req as any).user?.id;
+        const submittedAt = shouldSubmit ? new Date() : null;
+        const submittedBy = shouldSubmit ? userId : null;
+        const lastSavedAt = shouldSubmit ? null : new Date();
+        const lastSavedBy = shouldSubmit ? null : userId;
         const result = await pool.query(`
             INSERT INTO investment_projects (
                 department_type, request_type, project_name, project_code, city, district, area,
@@ -161,7 +165,7 @@ export const createInvestmentProject = async (req: Request, res: Response): Prom
                 $14,$15,$16,$17,$18,
                 $19,$20,$21,$22,$23,
                 $24,$25,$26,$27,$28,$29,
-                $30,$31,$32,$33,$34,$35,$36,$36,$36
+                $30,$31,$32,$33,$34,$35,$36,$37,$38,$39,$40
             ) RETURNING *`,
             [
                 trimmedDepartmentType, requestType, resolvedProjectName, resolvedProjectCode, city, district, area || 0,
@@ -172,10 +176,11 @@ export const createInvestmentProject = async (req: Request, res: Response): Prom
                 designFileUrl, documentsUrl, autocadUrl,
                 stationCode,
                 shouldSubmit,
-                shouldSubmit ? new Date() : null,
-                shouldSubmit ? userId : null,
-                shouldSubmit ? null : new Date(),
-                shouldSubmit ? null : userId,
+                submittedAt,
+                submittedBy,
+                lastSavedAt,
+                lastSavedBy,
+                userId,
                 userId,
             ]
         );
