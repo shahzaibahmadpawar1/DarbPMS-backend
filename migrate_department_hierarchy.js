@@ -19,7 +19,7 @@ async function migrate() {
         // Ensure department column exists before applying constraints.
         await client.query(`
             ALTER TABLE users
-            ADD COLUMN IF NOT EXISTS department VARCHAR(20);
+            ADD COLUMN IF NOT EXISTS department VARCHAR(50);
         `);
 
         // Keep only existing admin account(s), remove all others.
@@ -54,7 +54,27 @@ async function migrate() {
         await client.query(`
             ALTER TABLE users
             ADD CONSTRAINT users_department_check
-            CHECK (department IN ('investment', 'franchise') OR department IS NULL);
+            CHECK (
+                department IN (
+                    'investment',
+                    'franchise',
+                    'it',
+                    'project',
+                    'finance',
+                    'operation',
+                    'maintanance',
+                    'hr',
+                    'realestate',
+                    'procurement',
+                    'quality',
+                    'marketing',
+                    'property_management',
+                    'legal',
+                    'government_relations',
+                    'safety'
+                )
+                OR department IS NULL
+            );
         `);
 
         await client.query(`
@@ -66,9 +86,26 @@ async function migrate() {
             ALTER TABLE users
             ADD CONSTRAINT users_department_required_for_non_super_admin
             CHECK (
-                (role = 'super_admin' AND department IS NULL)
-                OR
-                (role <> 'super_admin' AND department IN ('investment', 'franchise'))
+                role = 'super_admin'
+                OR department IS NULL
+                OR department IN (
+                    'investment',
+                    'franchise',
+                    'it',
+                    'project',
+                    'finance',
+                    'operation',
+                    'maintanance',
+                    'hr',
+                    'realestate',
+                    'procurement',
+                    'quality',
+                    'marketing',
+                    'property_management',
+                    'legal',
+                    'government_relations',
+                    'safety'
+                )
             );
         `);
 

@@ -1,6 +1,6 @@
 import { Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
-import { AuthRequest, JWTPayload, UserRole } from '../types';
+import { AuthRequest, Department, JWTPayload, UserRole } from '../types';
 import { UserModel } from '../models/user.model';
 import pool from '../config/database';
 import { normalizeUserRole } from '../utils/roles';
@@ -22,29 +22,42 @@ const capabilityMinimumRole: Record<Capability, UserRole> = {
     manage_users: 'super_admin'
 };
 
-const normalizeDepartment = (value: unknown): 'investment' | 'franchise' | null => {
+const departmentAliases: Record<string, Department> = {
+    investment: 'investment',
+    franchise: 'franchise',
+    frenchise: 'franchise',
+    it: 'it',
+    project: 'project',
+    finance: 'finance',
+    operation: 'operation',
+    operations: 'operation',
+    maintanance: 'maintanance',
+    maintenance: 'maintanance',
+    hr: 'hr',
+    realestate: 'realestate',
+    real_estate: 'realestate',
+    procurement: 'procurement',
+    quality: 'quality',
+    marketing: 'marketing',
+    property_management: 'property_management',
+    propertymanagement: 'property_management',
+    legal: 'legal',
+    government_relations: 'government_relations',
+    governmentrelations: 'government_relations',
+    safety: 'safety',
+};
+
+const normalizeDepartment = (value: unknown): Department | null => {
     if (value === null || value === undefined) {
         return null;
     }
 
-    const normalized = String(value).trim().toLowerCase();
+    const normalized = String(value).trim().toLowerCase().replace(/[\s-]+/g, '_');
     if (!normalized) {
         return null;
     }
 
-    if (normalized === 'frenchise') {
-        return 'franchise';
-    }
-
-    if (normalized === 'investment') {
-        return 'investment';
-    }
-
-    if (normalized === 'franchise') {
-        return 'franchise';
-    }
-
-    return null;
+    return departmentAliases[normalized] ?? null;
 };
 
 const hydrateUserFromDb = async (req: AuthRequest): Promise<boolean> => {

@@ -5,9 +5,50 @@ import { RegisterRequest, LoginRequest, AuthResponse, AuthRequest, Department, U
 import { normalizeUserRole } from '../utils/roles';
 
 const validRoles: UserRole[] = ['super_admin', 'department_manager', 'supervisor', 'employee'];
-const validDepartments: Department[] = ['investment', 'franchise'];
+const validDepartments: Department[] = [
+    'investment',
+    'franchise',
+    'it',
+    'project',
+    'finance',
+    'operation',
+    'maintanance',
+    'hr',
+    'realestate',
+    'procurement',
+    'quality',
+    'marketing',
+    'property_management',
+    'legal',
+    'government_relations',
+    'safety',
+];
 const validStatuses: UserStatus[] = ['active', 'inactive'];
 const emailNoiseRegex = /[\s\u200B-\u200D\uFEFF]+/g;
+const departmentAliases: Record<string, Department> = {
+    investment: 'investment',
+    franchise: 'franchise',
+    frenchise: 'franchise',
+    it: 'it',
+    project: 'project',
+    finance: 'finance',
+    operation: 'operation',
+    operations: 'operation',
+    maintanance: 'maintanance',
+    maintenance: 'maintanance',
+    hr: 'hr',
+    realestate: 'realestate',
+    real_estate: 'realestate',
+    procurement: 'procurement',
+    quality: 'quality',
+    marketing: 'marketing',
+    property_management: 'property_management',
+    propertymanagement: 'property_management',
+    legal: 'legal',
+    government_relations: 'government_relations',
+    governmentrelations: 'government_relations',
+    safety: 'safety',
+};
 
 const isValidEmail = (value: string): boolean => {
     return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
@@ -41,12 +82,8 @@ const normalizeDepartment = (value: unknown): Department | null => {
         return null;
     }
 
-    const normalized = String(value).trim().toLowerCase();
-    if (normalized === 'frenchise') {
-        return 'franchise';
-    }
-
-    return validDepartments.includes(normalized as Department) ? (normalized as Department) : null;
+    const normalized = String(value).trim().toLowerCase().replace(/[\s-]+/g, '_');
+    return departmentAliases[normalized] ?? (validDepartments.includes(normalized as Department) ? (normalized as Department) : null);
 };
 
 

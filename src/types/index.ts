@@ -1,6 +1,22 @@
 import { Request } from 'express';
 
-export type Department = 'investment' | 'franchise';
+export type Department =
+    | 'investment'
+    | 'franchise'
+    | 'it'
+    | 'project'
+    | 'finance'
+    | 'operation'
+    | 'maintanance'
+    | 'hr'
+    | 'realestate'
+    | 'procurement'
+    | 'quality'
+    | 'marketing'
+    | 'property_management'
+    | 'legal'
+    | 'government_relations'
+    | 'safety';
 export type UserType = 'internal' | 'external';
 export type UserStatus = 'active' | 'inactive';
 
