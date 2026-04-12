@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import {
-    createBuildingPermit, getAllBuildingPermits, getBuildingPermitsByStation, updateBuildingPermit, deleteBuildingPermit
+    createBuildingPermit, getAllBuildingPermits, getBuildingPermitsByStation, updateBuildingPermit, deleteBuildingPermit, getLatestSavedBuildingPermit
 } from '../controllers/buildingPermits.controller';
 import { authenticateToken, requireCapability, requireDepartmentAccessByLookup, requireStationDepartmentAccess } from '../middleware/auth';
 
@@ -18,6 +18,7 @@ router.use(authenticateToken);
 
 router.post('/', requireCapability('create'), requireStationDepartmentAccess({ bodyField: 'stationCode' }), createBuildingPermit);
 router.get('/', requireCapability('view'), getAllBuildingPermits);
+router.get('/latest-saved', requireCapability('view'), getLatestSavedBuildingPermit);
 router.get('/station/:stationCode', requireCapability('view'), requireStationDepartmentAccess({ paramField: 'stationCode' }), getBuildingPermitsByStation);
 router.put('/:id', requireCapability('edit'), requireDepartmentAccessByLookup(buildingPermitDepartmentLookup, 'id'), updateBuildingPermit);
 router.delete('/:id', requireCapability('delete'), requireDepartmentAccessByLookup(buildingPermitDepartmentLookup, 'id'), deleteBuildingPermit);

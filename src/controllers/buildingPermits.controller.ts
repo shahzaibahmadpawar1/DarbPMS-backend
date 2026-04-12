@@ -2,8 +2,32 @@ import { Request, Response } from 'express';
 import pool from '../config/database';
 import { isSchemaCompatibilityError } from '../utils/dbErrors';
 
+let buildingPermitLifecycleReady = false;
+
+const ensureBuildingPermitLifecycleSchema = async (): Promise<void> => {
+    if (buildingPermitLifecycleReady) return;
+
+    await pool.query(`ALTER TABLE building_permits ADD COLUMN IF NOT EXISTS is_submitted BOOLEAN NOT NULL DEFAULT TRUE;`);
+    await pool.query(`ALTER TABLE building_permits ADD COLUMN IF NOT EXISTS submitted_at TIMESTAMP WITH TIME ZONE;`);
+    await pool.query(`ALTER TABLE building_permits ADD COLUMN IF NOT EXISTS submitted_by UUID REFERENCES users(id) ON DELETE SET NULL;`);
+    await pool.query(`ALTER TABLE building_permits ADD COLUMN IF NOT EXISTS last_saved_at TIMESTAMP WITH TIME ZONE;`);
+    await pool.query(`ALTER TABLE building_permits ADD COLUMN IF NOT EXISTS last_saved_by UUID REFERENCES users(id) ON DELETE SET NULL;`);
+
+    await pool.query(`
+        UPDATE building_permits
+        SET is_submitted = TRUE,
+            submitted_at = COALESCE(submitted_at, created_at),
+            submitted_by = COALESCE(submitted_by, created_by)
+        WHERE is_submitted IS DISTINCT FROM TRUE;
+    `);
+
+    buildingPermitLifecycleReady = true;
+};
+
 export const createBuildingPermit = async (req: Request, res: Response): Promise<void> => {
     try {
+        await ensureBuildingPermitLifecycleSchema();
+
         const {
             permitNumber, licenseDate, expiryDate, licenseType,
             organizationChartNumber, constructionType, urbanArea, landArea,
@@ -11,11 +35,14 @@ export const createBuildingPermit = async (req: Request, res: Response): Promise
             northDimensions, eastDimensions, southDimensions, westernDimensions,
             northThrowback, eastThrowback, southThrowback, westThrowback,
             constructionComponents, numberOfUnits, stationStatusCode,
-            stationCode, officeCode
+            stationCode, officeCode, submit
         } = req.body;
 
-        if (!permitNumber || !stationCode) {
-            res.status(400).json({ error: 'Permit Number and station code are required' });
+        const shouldSubmit = submit !== false;
+        const resolvedPermitNumber = String(permitNumber || '').trim() || `PERMIT-DRAFT-${Date.now()}`;
+
+        if (!stationCode || (shouldSubmit && !resolvedPermitNumber)) {
+            res.status(400).json({ error: 'Station code is required. Submit also requires permit number.' });
             return;
         }
 
@@ -35,7 +62,7 @@ export const createBuildingPermit = async (req: Request, res: Response): Promise
         `;
 
         const values = [
-            permitNumber, licenseDate || null, expiryDate || null, licenseType,
+            resolvedPermitNumber, licenseDate || null, expiryDate || null, licenseType,
             organizationChartNumber, constructionType, urbanArea, landArea || 0,
             wallsPerimeter || 0, northBorder, eastBorder, southBorder, westBorder,
             northDimensions || 0, eastDimensions || 0, southDimensions || 0, westernDimensions || 0,
@@ -45,7 +72,22 @@ export const createBuildingPermit = async (req: Request, res: Response): Promise
         ];
         const result = await pool.query(query, values);
 
-        res.status(201).json({ message: 'Building Permit created successfully', data: result.rows[0] });
+        await pool.query(`
+            UPDATE building_permits
+            SET is_submitted = $1,
+                submitted_at = CASE WHEN $1 THEN CURRENT_TIMESTAMP ELSE NULL END,
+                submitted_by = CASE WHEN $1 THEN $2 ELSE NULL END,
+                last_saved_at = CASE WHEN $1 THEN NULL ELSE CURRENT_TIMESTAMP END,
+                last_saved_by = CASE WHEN $1 THEN NULL ELSE $2 END
+            WHERE id = $3
+        `, [shouldSubmit, userId || null, result.rows[0].id]);
+
+        const refreshed = await pool.query('SELECT * FROM building_permits WHERE id = $1 LIMIT 1', [result.rows[0].id]);
+
+        res.status(201).json({
+            message: shouldSubmit ? 'Building permit submitted successfully' : 'Building permit saved successfully',
+            data: refreshed.rows[0],
+        });
     } catch (error: any) {
         console.error('Error creating building permit:', error);
         if (error.code === '23505') {
@@ -96,6 +138,8 @@ export const getBuildingPermitsByStation = async (req: Request, res: Response): 
 
 export const updateBuildingPermit = async (req: Request, res: Response): Promise<void> => {
     try {
+        await ensureBuildingPermitLifecycleSchema();
+
         const { id } = req.params;
         const {
             permitNumber, licenseDate, expiryDate, licenseType,
@@ -104,8 +148,9 @@ export const updateBuildingPermit = async (req: Request, res: Response): Promise
             northDimensions, eastDimensions, southDimensions, westernDimensions,
             northThrowback, eastThrowback, southThrowback, westThrowback,
             constructionComponents, numberOfUnits, stationStatusCode,
-            stationCode, officeCode
+            stationCode, officeCode, submit
         } = req.body;
+        const shouldSubmit = submit === true || submit === 'true';
         const userId = (req as any).user?.id;
 
         const query = `
@@ -136,9 +181,14 @@ export const updateBuildingPermit = async (req: Request, res: Response): Promise
                 station_status_code = COALESCE($24, station_status_code),
                 station_code = COALESCE($25, station_code),
                 office_code = COALESCE($26, office_code),
-                updated_by = $27,
+                is_submitted = $27,
+                submitted_at = CASE WHEN $27 THEN CURRENT_TIMESTAMP ELSE submitted_at END,
+                submitted_by = CASE WHEN $27 THEN $28 ELSE submitted_by END,
+                last_saved_at = CASE WHEN $27 THEN last_saved_at ELSE CURRENT_TIMESTAMP END,
+                last_saved_by = CASE WHEN $27 THEN last_saved_by ELSE $28 END,
+                updated_by = $28,
                 updated_at = CURRENT_TIMESTAMP
-            WHERE id = $28
+            WHERE id = $29
             RETURNING *
         `;
 
@@ -149,7 +199,7 @@ export const updateBuildingPermit = async (req: Request, res: Response): Promise
             northDimensions, eastDimensions, southDimensions, westernDimensions,
             northThrowback, eastThrowback, southThrowback, westThrowback,
             constructionComponents, numberOfUnits, stationStatusCode,
-            stationCode, officeCode, userId, id
+            stationCode, officeCode, shouldSubmit, userId, id
         ];
         const result = await pool.query(query, values);
 
@@ -164,6 +214,33 @@ export const updateBuildingPermit = async (req: Request, res: Response): Promise
             error: 'Failed to update building permit',
             details: error.message
         });
+    }
+};
+
+export const getLatestSavedBuildingPermit = async (req: Request, res: Response): Promise<void> => {
+    try {
+        await ensureBuildingPermitLifecycleSchema();
+
+        const userId = (req as any).user?.id;
+        const stationCode = String(req.query?.stationCode || '').trim();
+        if (!userId) {
+            res.status(200).json({ data: null });
+            return;
+        }
+
+        const result = await pool.query(`
+            SELECT * FROM building_permits
+            WHERE is_submitted = FALSE
+              AND created_by = $1
+              AND ($2 = '' OR station_code = $2)
+            ORDER BY COALESCE(last_saved_at, updated_at, created_at) DESC
+            LIMIT 1
+        `, [userId, stationCode]);
+
+        res.status(200).json({ data: result.rows[0] || null });
+    } catch (error: any) {
+        console.error('Error fetching latest saved building permit:', error);
+        res.status(500).json({ error: 'Failed to fetch latest saved building permit', details: error.message });
     }
 };
 

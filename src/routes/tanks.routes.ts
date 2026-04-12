@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { createTank, getAllTanks, getTankByCode, updateTank, deleteTank, getTanksByStation } from '../controllers/tanks.controller';
+import { createTank, getAllTanks, getTankByCode, updateTank, deleteTank, getTanksByStation, getLatestSavedTank } from '../controllers/tanks.controller';
 import { authenticateToken, requireCapability, requireDepartmentAccessByLookup, requireStationDepartmentAccess } from '../middleware/auth';
 
 const tankDepartmentLookup = `
@@ -15,6 +15,7 @@ router.use(authenticateToken);
 
 router.post('/', requireCapability('create'), requireStationDepartmentAccess({ bodyField: 'stationCode' }), createTank);
 router.get('/', requireCapability('view'), getAllTanks);
+router.get('/latest-saved', requireCapability('view'), getLatestSavedTank);
 router.get('/station/:stationCode', requireCapability('view'), requireStationDepartmentAccess({ paramField: 'stationCode' }), getTanksByStation);
 router.get('/:tankCode', requireCapability('view'), requireDepartmentAccessByLookup(tankDepartmentLookup, 'tankCode'), getTankByCode);
 router.put('/:tankCode', requireCapability('edit'), requireDepartmentAccessByLookup(tankDepartmentLookup, 'tankCode'), updateTank);

@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import {
-    createContract, getAllContracts, getContractsByStation, updateContract, deleteContract
+    createContract, getAllContracts, getContractsByStation, updateContract, deleteContract, getLatestSavedContract
 } from '../controllers/contracts.controller';
 import { authenticateToken, requireCapability, requireDepartmentAccessByLookup, requireStationDepartmentAccess } from '../middleware/auth';
 
@@ -18,6 +18,7 @@ router.use(authenticateToken);
 
 router.post('/', requireCapability('create'), requireStationDepartmentAccess({ bodyField: 'stationCode' }), createContract);
 router.get('/', requireCapability('view'), getAllContracts);
+router.get('/latest-saved', requireCapability('view'), getLatestSavedContract);
 router.get('/station/:stationCode', requireCapability('view'), requireStationDepartmentAccess({ paramField: 'stationCode' }), getContractsByStation);
 router.put('/:id', requireCapability('edit'), requireDepartmentAccessByLookup(contractDepartmentLookup, 'id'), updateContract);
 router.delete('/:id', requireCapability('delete'), requireDepartmentAccessByLookup(contractDepartmentLookup, 'id'), deleteContract);

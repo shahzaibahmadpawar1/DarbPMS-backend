@@ -3,6 +3,7 @@ import {
     createSalamahLicense, getAllSalamahLicenses, getSalamahLicensesByStation, updateSalamahLicense, deleteSalamahLicense,
     createTaqyeesLicense, getAllTaqyeesLicenses, getTaqyeesLicensesByStation, updateTaqyeesLicense, deleteTaqyeesLicense,
     createEnvironmentalLicense, getAllEnvironmentalLicenses, getEnvironmentalLicensesByStation, updateEnvironmentalLicense, deleteEnvironmentalLicense,
+    getLatestSavedSalamahLicense, getLatestSavedTaqyeesLicense, getLatestSavedEnvironmentalLicense,
     upsertLicenseAttachments, getLicenseAttachmentsByStation,
 } from '../controllers/governmentLicenses.controller';
 import { authenticateToken, requireCapability, requireDepartmentAccessByLookup, requireStationDepartmentAccess } from '../middleware/auth';
@@ -37,6 +38,7 @@ router.use(authenticateToken);
 // Salamah
 router.post('/salamah', requireCapability('create'), requireStationDepartmentAccess({ bodyField: 'stationCode' }), createSalamahLicense);
 router.get('/salamah', requireCapability('view'), getAllSalamahLicenses);
+router.get('/salamah/latest-saved', requireCapability('view'), getLatestSavedSalamahLicense);
 router.get('/salamah/station/:stationCode', requireCapability('view'), requireStationDepartmentAccess({ paramField: 'stationCode' }), getSalamahLicensesByStation);
 router.put('/salamah/:id', requireCapability('edit'), requireDepartmentAccessByLookup(salamahDepartmentLookup, 'id'), updateSalamahLicense);
 router.delete('/salamah/:id', requireCapability('delete'), requireDepartmentAccessByLookup(salamahDepartmentLookup, 'id'), deleteSalamahLicense);
@@ -44,6 +46,7 @@ router.delete('/salamah/:id', requireCapability('delete'), requireDepartmentAcce
 // Taqyees
 router.post('/taqyees', requireCapability('create'), requireStationDepartmentAccess({ bodyField: 'stationCode' }), createTaqyeesLicense);
 router.get('/taqyees', requireCapability('view'), getAllTaqyeesLicenses);
+router.get('/taqyees/latest-saved', requireCapability('view'), getLatestSavedTaqyeesLicense);
 router.get('/taqyees/station/:stationCode', requireCapability('view'), requireStationDepartmentAccess({ paramField: 'stationCode' }), getTaqyeesLicensesByStation);
 router.put('/taqyees/:id', requireCapability('edit'), requireDepartmentAccessByLookup(taqyeesDepartmentLookup, 'id'), updateTaqyeesLicense);
 router.delete('/taqyees/:id', requireCapability('delete'), requireDepartmentAccessByLookup(taqyeesDepartmentLookup, 'id'), deleteTaqyeesLicense);
@@ -51,6 +54,7 @@ router.delete('/taqyees/:id', requireCapability('delete'), requireDepartmentAcce
 // Environmental
 router.post('/environmental', requireCapability('create'), requireStationDepartmentAccess({ bodyField: 'stationCode' }), createEnvironmentalLicense);
 router.get('/environmental', requireCapability('view'), getAllEnvironmentalLicenses);
+router.get('/environmental/latest-saved', requireCapability('view'), getLatestSavedEnvironmentalLicense);
 router.get('/environmental/station/:stationCode', requireCapability('view'), requireStationDepartmentAccess({ paramField: 'stationCode' }), getEnvironmentalLicensesByStation);
 router.put('/environmental/:id', requireCapability('edit'), requireDepartmentAccessByLookup(environmentalDepartmentLookup, 'id'), updateEnvironmentalLicense);
 router.delete('/environmental/:id', requireCapability('delete'), requireDepartmentAccessByLookup(environmentalDepartmentLookup, 'id'), deleteEnvironmentalLicense);

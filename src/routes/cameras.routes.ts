@@ -5,7 +5,8 @@ import {
     getCameraBySerialNumber,
     updateCamera,
     deleteCamera,
-    getCamerasByStation
+    getCamerasByStation,
+    getLatestSavedCamera,
 } from '../controllers/cameras.controller';
 import { authenticateToken, requireCapability, requireDepartmentAccessByLookup, requireStationDepartmentAccess } from '../middleware/auth';
 
@@ -23,6 +24,7 @@ router.use(authenticateToken);
 
 router.post('/', requireCapability('create'), requireStationDepartmentAccess({ bodyField: 'stationCode' }), createCamera);
 router.get('/', requireCapability('view'), getAllCameras);
+router.get('/latest-saved', requireCapability('view'), getLatestSavedCamera);
 router.get('/station/:stationCode', requireCapability('view'), requireStationDepartmentAccess({ paramField: 'stationCode' }), getCamerasByStation);
 router.get('/:serialNumber', requireCapability('view'), requireDepartmentAccessByLookup(cameraDepartmentLookup, 'serialNumber'), getCameraBySerialNumber);
 router.put('/:serialNumber', requireCapability('edit'), requireDepartmentAccessByLookup(cameraDepartmentLookup, 'serialNumber'), updateCamera);

@@ -8,6 +8,7 @@ import {
     deleteInvestmentProject,
     getFeasibilityStats,
     getContractStats,
+    getLatestSavedInvestmentProject,
     updateInvestmentProjectReviewStatus,
 } from '../controllers/investmentProjects.controller';
 import { authenticateToken, requireCapability, requireDepartmentAccessByLookup, requireDepartmentMatchFromBody, requireStationDepartmentAccess } from '../middleware/auth';
@@ -28,6 +29,7 @@ router.get('/', requireCapability('view'), getAllInvestmentProjects);
 router.get('/station/:stationCode', requireCapability('view'), requireStationDepartmentAccess({ paramField: 'stationCode' }), getInvestmentProjectsByStation);
 router.get('/feasibility-stats', requireCapability('view'), getFeasibilityStats);
 router.get('/contract-stats', requireCapability('view'), getContractStats);
+router.get('/latest-saved', requireCapability('view'), getLatestSavedInvestmentProject);
 router.get('/:id', requireCapability('view'), requireDepartmentAccessByLookup(investmentProjectDepartmentLookup, 'id'), getInvestmentProjectById);
 router.put('/:id', requireCapability('edit'), requireDepartmentAccessByLookup(investmentProjectDepartmentLookup, 'id'), updateInvestmentProject);
 router.patch('/:id/review', requireCapability('edit'), requireDepartmentAccessByLookup(investmentProjectDepartmentLookup, 'id'), updateInvestmentProjectReviewStatus);

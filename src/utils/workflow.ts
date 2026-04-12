@@ -33,13 +33,43 @@ export const ensureWorkflowSchema = async (): Promise<void> => {
             assigned_by UUID REFERENCES users(id) ON DELETE SET NULL,
             manager_attachment_url TEXT,
             employee_attachment_url TEXT,
+            attachment_url TEXT,
+            attachment_note TEXT,
+            attachment_uploaded_by UUID REFERENCES users(id) ON DELETE SET NULL,
+            attachment_uploaded_at TIMESTAMP WITH TIME ZONE,
             manager_note TEXT,
             employee_note TEXT,
+            assignee_note TEXT,
             super_admin_comment TEXT,
             created_by UUID REFERENCES users(id) ON DELETE SET NULL,
             created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
         );
+    `);
+
+    await pool.query(`
+        ALTER TABLE project_workflow_tasks
+        ADD COLUMN IF NOT EXISTS assignee_note TEXT;
+    `);
+
+    await pool.query(`
+        ALTER TABLE project_workflow_tasks
+        ADD COLUMN IF NOT EXISTS attachment_url TEXT;
+    `);
+
+    await pool.query(`
+        ALTER TABLE project_workflow_tasks
+        ADD COLUMN IF NOT EXISTS attachment_note TEXT;
+    `);
+
+    await pool.query(`
+        ALTER TABLE project_workflow_tasks
+        ADD COLUMN IF NOT EXISTS attachment_uploaded_by UUID REFERENCES users(id) ON DELETE SET NULL;
+    `);
+
+    await pool.query(`
+        ALTER TABLE project_workflow_tasks
+        ADD COLUMN IF NOT EXISTS attachment_uploaded_at TIMESTAMP WITH TIME ZONE;
     `);
 
     await pool.query(`

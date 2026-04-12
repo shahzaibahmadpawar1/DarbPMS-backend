@@ -4,6 +4,45 @@ import { createInitialReviewTaskForProject } from './workflowTasks.controller';
 import { deriveAction, recordWorkflowTransition } from '../utils/workflow';
 import { isSchemaCompatibilityError } from '../utils/dbErrors';
 
+let investmentLifecycleSchemaReady = false;
+
+const ensureInvestmentLifecycleSchema = async (): Promise<void> => {
+    if (investmentLifecycleSchemaReady) {
+        return;
+    }
+
+    await pool.query(`
+        ALTER TABLE investment_projects
+        ADD COLUMN IF NOT EXISTS is_submitted BOOLEAN NOT NULL DEFAULT TRUE;
+    `);
+    await pool.query(`
+        ALTER TABLE investment_projects
+        ADD COLUMN IF NOT EXISTS submitted_at TIMESTAMP WITH TIME ZONE;
+    `);
+    await pool.query(`
+        ALTER TABLE investment_projects
+        ADD COLUMN IF NOT EXISTS submitted_by UUID REFERENCES users(id) ON DELETE SET NULL;
+    `);
+    await pool.query(`
+        ALTER TABLE investment_projects
+        ADD COLUMN IF NOT EXISTS last_saved_at TIMESTAMP WITH TIME ZONE;
+    `);
+    await pool.query(`
+        ALTER TABLE investment_projects
+        ADD COLUMN IF NOT EXISTS last_saved_by UUID REFERENCES users(id) ON DELETE SET NULL;
+    `);
+
+    await pool.query(`
+        UPDATE investment_projects
+        SET is_submitted = TRUE,
+            submitted_at = COALESCE(submitted_at, created_at),
+            submitted_by = COALESCE(submitted_by, created_by)
+        WHERE is_submitted IS DISTINCT FROM TRUE;
+    `);
+
+    investmentLifecycleSchemaReady = true;
+};
+
 const ALLOWED_CONTRACT_TYPES = new Set(['Operation Station', 'Lease Stations', 'Investment', 'Franchise Station']);
 
 const normalizeContractType = (value: unknown): string | null => {
@@ -76,6 +115,8 @@ const upsertStationFromProject = async (project: any, userId: string): Promise<v
 // ─── CREATE ───────────────────────────────────────────────────────────────────
 export const createInvestmentProject = async (req: Request, res: Response): Promise<void> => {
     try {
+        await ensureInvestmentLifecycleSchema();
+
         const {
             departmentType, requestType, projectName, projectCode, city, district, area,
             projectStatus, contractType, googleLocation, priorityLevel, orderDate, requestSender,
@@ -88,10 +129,17 @@ export const createInvestmentProject = async (req: Request, res: Response): Prom
             // Attachments (URLs after separate upload)
             designFileUrl, documentsUrl, autocadUrl,
             stationCode,
+            submit,
         } = req.body;
 
-        if (!projectName || !projectCode || !departmentType) {
-            res.status(400).json({ error: 'Project name, code and department type are required' });
+        const shouldSubmit = submit !== false;
+        const trimmedDepartmentType = String(departmentType || '').trim().toLowerCase();
+        const fallbackDraftCode = `DRAFT-${Date.now()}-${Math.random().toString(36).slice(2, 6).toUpperCase()}`;
+        const resolvedProjectName = String(projectName || '').trim() || (shouldSubmit ? '' : 'Draft Project');
+        const resolvedProjectCode = String(projectCode || '').trim() || (shouldSubmit ? '' : fallbackDraftCode);
+
+        if (!trimmedDepartmentType || (shouldSubmit && (!resolvedProjectName || !resolvedProjectCode))) {
+            res.status(400).json({ error: 'Department type is required. Submit also requires project name and project code.' });
             return;
         }
 
@@ -106,30 +154,39 @@ export const createInvestmentProject = async (req: Request, res: Response): Prom
                 super_market_area, fuel_station_area, kiosks_area, retail_shop_area, drive_through_area,
                 owner_name, owner_contact_no, id_no, national_address, email, owner_type,
                 design_file_url, documents_url, autocad_url,
-                station_code, created_by, updated_by
+                station_code, is_submitted, submitted_at, submitted_by, last_saved_at, last_saved_by, created_by, updated_by
             ) VALUES (
                 $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,
                 $14,$15,$16,$17,$18,
                 $19,$20,$21,$22,$23,
                 $24,$25,$26,$27,$28,$29,
-                $30,$31,$32,$33,$34,$34
+                $30,$31,$32,$33,$34,$35,$36,$36,$36
             ) RETURNING *`,
             [
-                departmentType, requestType, projectName, projectCode, city, district, area || 0,
+                trimmedDepartmentType, requestType, resolvedProjectName, resolvedProjectCode, city, district, area || 0,
                 projectStatus, normalizedContractType, googleLocation, priorityLevel, orderDate || null, requestSender,
                 superMarket || 0, fuelStation || 0, kiosks || 0, retailShop || 0, driveThrough || 0,
                 superMarketArea || 0, fuelStationArea || 0, kiosksArea || 0, retailShopArea || 0, driveThroughArea || 0,
                 ownerName, ownerContactNo, idNo, nationalAddress, email, ownerType || 'individual',
                 designFileUrl, documentsUrl, autocadUrl,
-                stationCode, userId,
+                stationCode,
+                shouldSubmit,
+                shouldSubmit ? new Date() : null,
+                shouldSubmit ? userId : null,
+                shouldSubmit ? null : new Date(),
+                shouldSubmit ? null : userId,
+                userId,
             ]
         );
 
-        if (userId) {
+        if (userId && shouldSubmit) {
             await createInitialReviewTaskForProject(result.rows[0].id, userId);
         }
 
-        res.status(201).json({ message: 'Investment project created successfully', data: result.rows[0] });
+        res.status(201).json({
+            message: shouldSubmit ? 'Investment project submitted successfully' : 'Investment project saved successfully',
+            data: result.rows[0],
+        });
     } catch (error: any) {
         console.error('Error creating investment project:', error);
         if (error.code === '23505') { res.status(409).json({ error: 'Project code already exists' }); return; }
@@ -234,6 +291,8 @@ export const getInvestmentProjectById = async (req: Request, res: Response): Pro
 // ─── UPDATE ───────────────────────────────────────────────────────────────────
 export const updateInvestmentProject = async (req: Request, res: Response): Promise<void> => {
     try {
+        await ensureInvestmentLifecycleSchema();
+
         const { id } = req.params;
         const userId = (req as any).user?.id;
         const fieldMap: Record<string, string> = {
@@ -261,7 +320,11 @@ export const updateInvestmentProject = async (req: Request, res: Response): Prom
             pmComment: 'pm_comment',
             ceoComment: 'ceo_comment'
         };
-        const fields = Object.entries(req.body).filter(([_, v]) => v !== undefined);
+        const submitFlag = req.body?.submit;
+        const shouldSubmit = submitFlag === true || submitFlag === 'true';
+
+        const fields = Object.entries(req.body)
+            .filter(([k, v]) => k !== 'submit' && v !== undefined);
         if (!fields.length) { res.status(400).json({ error: 'No fields to update' }); return; }
 
         const normalizedFields = fields.map(([key, value]) => {
@@ -272,13 +335,56 @@ export const updateInvestmentProject = async (req: Request, res: Response): Prom
         });
 
         const setClauses = normalizedFields.map(([k, _], i) => `${fieldMap[k] || k} = $${i + 1}`).join(', ');
+        const submissionClauses = shouldSubmit
+            ? ', is_submitted = TRUE, submitted_at = CURRENT_TIMESTAMP, submitted_by = $' + (normalizedFields.length + 2)
+            : ', is_submitted = FALSE, last_saved_at = CURRENT_TIMESTAMP, last_saved_by = $' + (normalizedFields.length + 2);
         const result = await pool.query(
-            `UPDATE investment_projects SET ${setClauses}, updated_by = $${normalizedFields.length + 1}, updated_at = CURRENT_TIMESTAMP WHERE id = $${normalizedFields.length + 2} RETURNING *`,
-            [...normalizedFields.map(([_, v]) => v), userId, id]);
+            `UPDATE investment_projects SET ${setClauses}, updated_by = $${normalizedFields.length + 1}, updated_at = CURRENT_TIMESTAMP${submissionClauses} WHERE id = $${normalizedFields.length + 3} RETURNING *`,
+            [...normalizedFields.map(([_, v]) => v), userId, userId, id]);
         if (!result.rows.length) { res.status(404).json({ error: 'Project not found' }); return; }
+
+        if (shouldSubmit && userId) {
+            await createInitialReviewTaskForProject(id, userId);
+        }
+
         res.status(200).json({ message: 'Project updated', data: result.rows[0] });
     } catch (error: any) {
         res.status(500).json({ error: 'Failed to update project', details: error.message });
+    }
+};
+
+export const getLatestSavedInvestmentProject = async (req: Request, res: Response): Promise<void> => {
+    try {
+        await ensureInvestmentLifecycleSchema();
+
+        const userId = (req as any).user?.id;
+        const requestedDepartment = String(req.query?.departmentType || '').trim().toLowerCase();
+        const userRole = (req as any).user?.role;
+        const userDepartment = (req as any).user?.department;
+        const effectiveDepartmentType = userRole === 'super_admin' ? requestedDepartment : userDepartment;
+
+        if (!userId || !effectiveDepartmentType) {
+            res.status(200).json({ data: null });
+            return;
+        }
+
+        const result = await pool.query(`
+            SELECT *
+            FROM investment_projects
+            WHERE department_type = $1
+              AND is_submitted = FALSE
+              AND created_by = $2
+            ORDER BY COALESCE(last_saved_at, updated_at, created_at) DESC
+            LIMIT 1
+        `, [effectiveDepartmentType, userId]);
+
+        res.status(200).json({ data: result.rows[0] || null });
+    } catch (error: any) {
+        if (isSchemaCompatibilityError(error)) {
+            res.status(200).json({ data: null });
+            return;
+        }
+        res.status(500).json({ error: 'Failed to fetch latest saved project', details: error.message });
     }
 };
 

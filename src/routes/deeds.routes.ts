@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import {
-    createDeed, getAllDeeds, getDeedsByStation, updateDeed, deleteDeed
+    createDeed, getAllDeeds, getDeedsByStation, updateDeed, deleteDeed, getLatestSavedDeed
 } from '../controllers/deeds.controller';
 import { authenticateToken, requireCapability, requireDepartmentAccessByLookup, requireStationDepartmentAccess } from '../middleware/auth';
 
@@ -18,6 +18,7 @@ router.use(authenticateToken);
 
 router.post('/', requireCapability('create'), requireStationDepartmentAccess({ bodyField: 'stationCode' }), createDeed);
 router.get('/', requireCapability('view'), getAllDeeds);
+router.get('/latest-saved', requireCapability('view'), getLatestSavedDeed);
 router.get('/station/:stationCode', requireCapability('view'), requireStationDepartmentAccess({ paramField: 'stationCode' }), getDeedsByStation);
 router.put('/:id', requireCapability('edit'), requireDepartmentAccessByLookup(deedDepartmentLookup, 'id'), updateDeed);
 router.delete('/:id', requireCapability('delete'), requireDepartmentAccessByLookup(deedDepartmentLookup, 'id'), deleteDeed);

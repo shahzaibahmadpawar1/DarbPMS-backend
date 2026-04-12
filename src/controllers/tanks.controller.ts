@@ -2,12 +2,38 @@ import { Request, Response } from 'express';
 import pool from '../config/database';
 import { isSchemaCompatibilityError } from '../utils/dbErrors';
 
+let tankLifecycleReady = false;
+
+const ensureTankLifecycleSchema = async (): Promise<void> => {
+    if (tankLifecycleReady) return;
+
+    await pool.query(`ALTER TABLE tanks ADD COLUMN IF NOT EXISTS is_submitted BOOLEAN NOT NULL DEFAULT TRUE;`);
+    await pool.query(`ALTER TABLE tanks ADD COLUMN IF NOT EXISTS submitted_at TIMESTAMP WITH TIME ZONE;`);
+    await pool.query(`ALTER TABLE tanks ADD COLUMN IF NOT EXISTS submitted_by UUID REFERENCES users(id) ON DELETE SET NULL;`);
+    await pool.query(`ALTER TABLE tanks ADD COLUMN IF NOT EXISTS last_saved_at TIMESTAMP WITH TIME ZONE;`);
+    await pool.query(`ALTER TABLE tanks ADD COLUMN IF NOT EXISTS last_saved_by UUID REFERENCES users(id) ON DELETE SET NULL;`);
+
+    await pool.query(`
+        UPDATE tanks
+        SET is_submitted = TRUE,
+            submitted_at = COALESCE(submitted_at, created_at),
+            submitted_by = COALESCE(submitted_by, created_by)
+        WHERE is_submitted IS DISTINCT FROM TRUE;
+    `);
+
+    tankLifecycleReady = true;
+};
+
 export const createTank = async (req: Request, res: Response): Promise<void> => {
     try {
-        const { tankCode, fuelType, vendor, tankCapacity, tankSize, tankManufacturer, tankWarrantyCertificate, stationCode, canopyCode } = req.body;
+        await ensureTankLifecycleSchema();
 
-        if (!tankCode || !stationCode) {
-            res.status(400).json({ error: 'Tank code and station code are required' });
+        const { tankCode, fuelType, vendor, tankCapacity, tankSize, tankManufacturer, tankWarrantyCertificate, stationCode, canopyCode, submit } = req.body;
+        const shouldSubmit = submit !== false;
+        const resolvedTankCode = String(tankCode || '').trim() || `TNK-${Date.now()}`;
+
+        if (!stationCode || (shouldSubmit && !resolvedTankCode)) {
+            res.status(400).json({ error: 'Station code is required. Submit also requires tank code.' });
             return;
         }
 
@@ -18,10 +44,25 @@ export const createTank = async (req: Request, res: Response): Promise<void> => 
             RETURNING *
         `;
 
-        const values = [tankCode, fuelType, vendor, tankCapacity, tankSize, tankManufacturer, tankWarrantyCertificate, stationCode, canopyCode, userId];
+        const values = [resolvedTankCode, fuelType, vendor, tankCapacity, tankSize, tankManufacturer, tankWarrantyCertificate, stationCode, canopyCode, userId];
         const result = await pool.query(query, values);
 
-        res.status(201).json({ message: 'Tank created successfully', data: result.rows[0] });
+        await pool.query(`
+            UPDATE tanks
+            SET is_submitted = $1,
+                submitted_at = CASE WHEN $1 THEN CURRENT_TIMESTAMP ELSE NULL END,
+                submitted_by = CASE WHEN $1 THEN $2 ELSE NULL END,
+                last_saved_at = CASE WHEN $1 THEN NULL ELSE CURRENT_TIMESTAMP END,
+                last_saved_by = CASE WHEN $1 THEN NULL ELSE $2 END
+            WHERE tank_code = $3
+        `, [shouldSubmit, userId || null, result.rows[0].tank_code]);
+
+        const refreshed = await pool.query('SELECT * FROM tanks WHERE tank_code = $1 LIMIT 1', [result.rows[0].tank_code]);
+
+        res.status(201).json({
+            message: shouldSubmit ? 'Tank submitted successfully' : 'Tank saved successfully',
+            data: refreshed.rows[0],
+        });
     } catch (error: any) {
         console.error('Error creating tank:', error);
         if (error.code === '23505') {
@@ -84,8 +125,11 @@ export const getTankByCode = async (req: Request, res: Response): Promise<void> 
 
 export const updateTank = async (req: Request, res: Response): Promise<void> => {
     try {
+        await ensureTankLifecycleSchema();
+
         const { tankCode } = req.params;
-        const { fuelType, vendor, tankCapacity, tankSize, tankManufacturer, tankWarrantyCertificate, stationCode, canopyCode } = req.body;
+        const { fuelType, vendor, tankCapacity, tankSize, tankManufacturer, tankWarrantyCertificate, stationCode, canopyCode, submit } = req.body;
+        const shouldSubmit = submit === true || submit === 'true';
         const userId = (req as any).user?.id;
 
         const query = `
@@ -98,13 +142,18 @@ export const updateTank = async (req: Request, res: Response): Promise<void> => 
                 tank_warranty_certificate = COALESCE($6, tank_warranty_certificate),
                 station_code = COALESCE($7, station_code),
                 canopy_code = COALESCE($8, canopy_code),
-                updated_by = $9,
+                is_submitted = $9,
+                submitted_at = CASE WHEN $9 THEN CURRENT_TIMESTAMP ELSE submitted_at END,
+                submitted_by = CASE WHEN $9 THEN $10 ELSE submitted_by END,
+                last_saved_at = CASE WHEN $9 THEN last_saved_at ELSE CURRENT_TIMESTAMP END,
+                last_saved_by = CASE WHEN $9 THEN last_saved_by ELSE $10 END,
+                updated_by = $10,
                 updated_at = CURRENT_TIMESTAMP
-            WHERE tank_code = $10
+            WHERE tank_code = $11
             RETURNING *
         `;
 
-        const values = [fuelType, vendor, tankCapacity, tankSize, tankManufacturer, tankWarrantyCertificate, stationCode, canopyCode, userId, tankCode];
+        const values = [fuelType, vendor, tankCapacity, tankSize, tankManufacturer, tankWarrantyCertificate, stationCode, canopyCode, shouldSubmit, userId, tankCode];
         const result = await pool.query(query, values);
 
         if (result.rows.length === 0) {
@@ -115,6 +164,33 @@ export const updateTank = async (req: Request, res: Response): Promise<void> => 
     } catch (error) {
         console.error('Error updating tank:', error);
         res.status(500).json({ error: 'Failed to update tank' });
+    }
+};
+
+export const getLatestSavedTank = async (req: Request, res: Response): Promise<void> => {
+    try {
+        await ensureTankLifecycleSchema();
+
+        const userId = (req as any).user?.id;
+        const stationCode = String(req.query?.stationCode || '').trim();
+        if (!userId) {
+            res.status(200).json({ data: null });
+            return;
+        }
+
+        const result = await pool.query(`
+            SELECT * FROM tanks
+            WHERE is_submitted = FALSE
+              AND created_by = $1
+              AND ($2 = '' OR station_code = $2)
+            ORDER BY COALESCE(last_saved_at, updated_at, created_at) DESC
+            LIMIT 1
+        `, [userId, stationCode]);
+
+        res.status(200).json({ data: result.rows[0] || null });
+    } catch (error) {
+        console.error('Error fetching latest saved tank:', error);
+        res.status(500).json({ error: 'Failed to fetch latest saved tank' });
     }
 };
 

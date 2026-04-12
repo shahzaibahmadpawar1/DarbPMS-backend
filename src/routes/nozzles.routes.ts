@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { createNozzle, getAllNozzles, getNozzleBySerialNumber, updateNozzle, deleteNozzle, getNozzlesByDispenser } from '../controllers/nozzles.controller';
+import { createNozzle, getAllNozzles, getNozzleBySerialNumber, updateNozzle, deleteNozzle, getNozzlesByDispenser, getLatestSavedNozzle } from '../controllers/nozzles.controller';
 import { authenticateToken, requireCapability, requireDepartmentAccessByLookup } from '../middleware/auth';
 
 const nozzleDepartmentLookup = `
@@ -24,6 +24,7 @@ router.use(authenticateToken);
 
 router.post('/', requireCapability('create'), createNozzle);
 router.get('/', requireCapability('view'), getAllNozzles);
+router.get('/latest-saved', requireCapability('view'), getLatestSavedNozzle);
 router.get('/dispenser/:dispenserSerialNumber', requireCapability('view'), requireDepartmentAccessByLookup(dispenserDepartmentLookup, 'dispenserSerialNumber'), getNozzlesByDispenser);
 router.get('/:serialNumber', requireCapability('view'), requireDepartmentAccessByLookup(nozzleDepartmentLookup, 'serialNumber'), getNozzleBySerialNumber);
 router.put('/:serialNumber', requireCapability('edit'), requireDepartmentAccessByLookup(nozzleDepartmentLookup, 'serialNumber'), updateNozzle);

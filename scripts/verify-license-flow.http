@@ -1,0 +1,101 @@
+@baseUrl = http://localhost:5000/api
+@token = REPLACE_WITH_BEARER_TOKEN
+
+### 1) Commercial - latest saved
+GET {{baseUrl}}/commercial-licenses/latest-saved
+Authorization: Bearer {{token}}
+
+### 2) Commercial - save draft
+POST {{baseUrl}}/commercial-licenses
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "licenseNo": "COM-QA-001",
+  "stationCode": "N101",
+  "ownerName": "QA Owner",
+  "submit": false
+}
+
+### 3) Commercial - submit draft (replace :id)
+PUT {{baseUrl}}/commercial-licenses/:id
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "submit": true
+}
+
+### 4) Environmental - latest saved
+GET {{baseUrl}}/government-licenses/environmental/latest-saved
+Authorization: Bearer {{token}}
+
+### 5) Environmental - save draft
+POST {{baseUrl}}/government-licenses/environmental
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "issuanceNo": "ENV-QA-001",
+  "stationCode": "N101",
+  "facilityName": "QA Facility",
+  "submit": false
+}
+
+### 6) Environmental - submit draft (replace :id)
+PUT {{baseUrl}}/government-licenses/environmental/:id
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "submit": true
+}
+
+### 7) Salamah - latest saved
+GET {{baseUrl}}/government-licenses/salamah/latest-saved
+Authorization: Bearer {{token}}
+
+### 8) Salamah - save draft
+POST {{baseUrl}}/government-licenses/salamah
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "licenseNo": "SAL-QA-001",
+  "stationCode": "N101",
+  "facilityName": "QA Safety Facility",
+  "submit": false
+}
+
+### 9) Salamah - submit draft (replace :id)
+PUT {{baseUrl}}/government-licenses/salamah/:id
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "submit": true
+}
+
+### 10) Taqyees - latest saved
+GET {{baseUrl}}/government-licenses/taqyees/latest-saved
+Authorization: Bearer {{token}}
+
+### 11) Taqyees - save draft
+POST {{baseUrl}}/government-licenses/taqyees
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "licenseNo": "TAQ-QA-001",
+  "stationCode": "N101",
+  "submit": false
+}
+
+### 12) Taqyees - submit draft (replace :id)
+PUT {{baseUrl}}/government-licenses/taqyees/:id
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "submit": true
+}

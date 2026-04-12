@@ -2,16 +2,50 @@ import { Request, Response } from 'express';
 import pool from '../config/database';
 import { isSchemaCompatibilityError } from '../utils/dbErrors';
 
-// ─── SALAMAH LICENSE ──────────────────────────────────────────────────────────
+const licenseLifecycleReady: Record<string, boolean> = {};
+
+type LicenseTable = 'salamah_licenses' | 'taqyees_licenses' | 'environmental_licenses';
+
+const ensureLicenseLifecycleSchema = async (tableName: LicenseTable): Promise<void> => {
+    if (licenseLifecycleReady[tableName]) return;
+
+    await pool.query(`ALTER TABLE ${tableName} ADD COLUMN IF NOT EXISTS is_submitted BOOLEAN NOT NULL DEFAULT TRUE;`);
+    await pool.query(`ALTER TABLE ${tableName} ADD COLUMN IF NOT EXISTS submitted_at TIMESTAMP WITH TIME ZONE;`);
+    await pool.query(`ALTER TABLE ${tableName} ADD COLUMN IF NOT EXISTS submitted_by UUID REFERENCES users(id) ON DELETE SET NULL;`);
+    await pool.query(`ALTER TABLE ${tableName} ADD COLUMN IF NOT EXISTS last_saved_at TIMESTAMP WITH TIME ZONE;`);
+    await pool.query(`ALTER TABLE ${tableName} ADD COLUMN IF NOT EXISTS last_saved_by UUID REFERENCES users(id) ON DELETE SET NULL;`);
+
+    await pool.query(`
+        UPDATE ${tableName}
+        SET is_submitted = TRUE,
+            submitted_at = COALESCE(submitted_at, created_at),
+            submitted_by = COALESCE(submitted_by, created_by)
+        WHERE is_submitted IS DISTINCT FROM TRUE;
+    `);
+
+    licenseLifecycleReady[tableName] = true;
+};
+
+// --- SALAMAH LICENSE --------------------------------------------------------
 export const createSalamahLicense = async (req: Request, res: Response): Promise<void> => {
     try {
+        await ensureLicenseLifecycleSchema('salamah_licenses');
+
         const {
             licenseNo, issuanceDate, licenseExpiryDate, numberOfDays, licenseStatus,
             investorName, ministryOfInteriorNo, nationalAddress, commercialRegister,
             facilityName, branch, area, city, district, street, landNo, shopSpace,
-            stationCode, officeCode
+            stationCode, officeCode, submit
         } = req.body;
-        if (!licenseNo || !stationCode) { res.status(400).json({ error: 'License No and station code are required' }); return; }
+
+        const shouldSubmit = submit !== false;
+        const resolvedLicenseNo = String(licenseNo || '').trim() || `SAL-DRAFT-${Date.now()}`;
+
+        if (!stationCode || (shouldSubmit && !resolvedLicenseNo)) {
+            res.status(400).json({ error: 'Station code is required. Submit also requires License No.' });
+            return;
+        }
+
         const userId = (req as any).user?.id;
         const result = await pool.query(`
             INSERT INTO salamah_licenses (
@@ -21,11 +55,26 @@ export const createSalamahLicense = async (req: Request, res: Response): Promise
                 station_code, office_code, created_by, updated_by
             ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$20)
             RETURNING *`,
-            [licenseNo, issuanceDate || null, licenseExpiryDate || null, numberOfDays || 0, licenseStatus,
+            [resolvedLicenseNo, issuanceDate || null, licenseExpiryDate || null, numberOfDays || 0, licenseStatus,
                 investorName, ministryOfInteriorNo, nationalAddress, commercialRegister,
                 facilityName, branch, area, city, district, street, landNo, shopSpace || 0,
                 stationCode, officeCode, userId]);
-        res.status(201).json({ message: 'Salamah License created successfully', data: result.rows[0] });
+
+        await pool.query(`
+            UPDATE salamah_licenses
+            SET is_submitted = $1,
+                submitted_at = CASE WHEN $1 THEN CURRENT_TIMESTAMP ELSE NULL END,
+                submitted_by = CASE WHEN $1 THEN $2 ELSE NULL END,
+                last_saved_at = CASE WHEN $1 THEN NULL ELSE CURRENT_TIMESTAMP END,
+                last_saved_by = CASE WHEN $1 THEN NULL ELSE $2 END
+            WHERE id = $3
+        `, [shouldSubmit, userId || null, result.rows[0].id]);
+
+        const refreshed = await pool.query('SELECT * FROM salamah_licenses WHERE id = $1 LIMIT 1', [result.rows[0].id]);
+        res.status(201).json({
+            message: shouldSubmit ? 'Salamah License submitted successfully' : 'Salamah License saved successfully',
+            data: refreshed.rows[0],
+        });
     } catch (error: any) {
         console.error('Error creating Salamah license:', error);
         if (error.code === '23505') { res.status(409).json({ error: 'License No already exists' }); return; }
@@ -64,18 +113,62 @@ export const getSalamahLicensesByStation = async (req: Request, res: Response): 
 
 export const updateSalamahLicense = async (req: Request, res: Response): Promise<void> => {
     try {
+        await ensureLicenseLifecycleSchema('salamah_licenses');
+
         const { id } = req.params;
         const userId = (req as any).user?.id;
-        const fields = Object.entries(req.body).filter(([_, v]) => v !== undefined);
+        const submit = (req.body as any)?.submit;
+        const shouldSubmit = submit === true || submit === 'true';
+        const fields = Object.entries(req.body).filter(([k, v]) => k !== 'submit' && v !== undefined);
+
         if (fields.length === 0) { res.status(400).json({ error: 'No fields to update' }); return; }
+
         const setClause = fields.map(([k, _], i) => `${k.replace(/[A-Z]/g, l => `_${l.toLowerCase()}`)} = $${i + 1}`).join(', ');
         const result = await pool.query(
-            `UPDATE salamah_licenses SET ${setClause}, updated_by = $${fields.length + 1}, updated_at = CURRENT_TIMESTAMP WHERE id = $${fields.length + 2} RETURNING *`,
-            [...fields.map(([_, v]) => v), userId, id]);
+            `UPDATE salamah_licenses
+             SET ${setClause},
+                 is_submitted = $${fields.length + 1},
+                 submitted_at = CASE WHEN $${fields.length + 1} THEN CURRENT_TIMESTAMP ELSE submitted_at END,
+                 submitted_by = CASE WHEN $${fields.length + 1} THEN $${fields.length + 2} ELSE submitted_by END,
+                 last_saved_at = CASE WHEN $${fields.length + 1} THEN last_saved_at ELSE CURRENT_TIMESTAMP END,
+                 last_saved_by = CASE WHEN $${fields.length + 1} THEN last_saved_by ELSE $${fields.length + 2} END,
+                 updated_by = $${fields.length + 2},
+                 updated_at = CURRENT_TIMESTAMP
+             WHERE id = $${fields.length + 3}
+             RETURNING *`,
+            [...fields.map(([_, v]) => v), shouldSubmit, userId, id]
+        );
+
         if (result.rows.length === 0) { res.status(404).json({ error: 'Salamah License not found' }); return; }
         res.status(200).json({ message: 'Salamah License updated successfully', data: result.rows[0] });
     } catch (error: any) {
         res.status(500).json({ error: 'Failed to update Salamah license', details: error.message });
+    }
+};
+
+export const getLatestSavedSalamahLicense = async (req: Request, res: Response): Promise<void> => {
+    try {
+        await ensureLicenseLifecycleSchema('salamah_licenses');
+
+        const userId = (req as any).user?.id;
+        const stationCode = String(req.query?.stationCode || '').trim();
+        if (!userId) {
+            res.status(200).json({ data: null });
+            return;
+        }
+
+        const result = await pool.query(`
+            SELECT * FROM salamah_licenses
+            WHERE is_submitted = FALSE
+              AND created_by = $1
+              AND ($2 = '' OR station_code = $2)
+            ORDER BY COALESCE(last_saved_at, updated_at, created_at) DESC
+            LIMIT 1
+        `, [userId, stationCode]);
+
+        res.status(200).json({ data: result.rows[0] || null });
+    } catch (error: any) {
+        res.status(500).json({ error: 'Failed to fetch latest saved Salamah license', details: error.message });
     }
 };
 
@@ -89,17 +182,42 @@ export const deleteSalamahLicense = async (req: Request, res: Response): Promise
     }
 };
 
-// ─── TAQYEES LICENSE ─────────────────────────────────────────────────────────
+// --- TAQYEES LICENSE --------------------------------------------------------
 export const createTaqyeesLicense = async (req: Request, res: Response): Promise<void> => {
     try {
-        const { licenseNo, issuanceDate, licenseExpiryDate, numberOfDays, licenseStatus, stationCode, officeCode } = req.body;
-        if (!licenseNo || !stationCode) { res.status(400).json({ error: 'License No and station code are required' }); return; }
+        await ensureLicenseLifecycleSchema('taqyees_licenses');
+
+        const { licenseNo, issuanceDate, licenseExpiryDate, numberOfDays, licenseStatus, stationCode, officeCode, submit } = req.body;
+        const shouldSubmit = submit !== false;
+        const resolvedLicenseNo = String(licenseNo || '').trim() || `TAQ-DRAFT-${Date.now()}`;
+
+        if (!stationCode || (shouldSubmit && !resolvedLicenseNo)) {
+            res.status(400).json({ error: 'Station code is required. Submit also requires License No.' });
+            return;
+        }
+
         const userId = (req as any).user?.id;
         const result = await pool.query(`
             INSERT INTO taqyees_licenses (license_no, issuance_date, license_expiry_date, number_of_days, license_status, station_code, office_code, created_by, updated_by)
             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$8) RETURNING *`,
-            [licenseNo, issuanceDate || null, licenseExpiryDate || null, numberOfDays || 0, licenseStatus, stationCode, officeCode, userId]);
-        res.status(201).json({ message: 'Taqyees License created successfully', data: result.rows[0] });
+            [resolvedLicenseNo, issuanceDate || null, licenseExpiryDate || null, numberOfDays || 0, licenseStatus, stationCode, officeCode, userId]
+        );
+
+        await pool.query(`
+            UPDATE taqyees_licenses
+            SET is_submitted = $1,
+                submitted_at = CASE WHEN $1 THEN CURRENT_TIMESTAMP ELSE NULL END,
+                submitted_by = CASE WHEN $1 THEN $2 ELSE NULL END,
+                last_saved_at = CASE WHEN $1 THEN NULL ELSE CURRENT_TIMESTAMP END,
+                last_saved_by = CASE WHEN $1 THEN NULL ELSE $2 END
+            WHERE id = $3
+        `, [shouldSubmit, userId || null, result.rows[0].id]);
+
+        const refreshed = await pool.query('SELECT * FROM taqyees_licenses WHERE id = $1 LIMIT 1', [result.rows[0].id]);
+        res.status(201).json({
+            message: shouldSubmit ? 'Taqyees License submitted successfully' : 'Taqyees License saved successfully',
+            data: refreshed.rows[0],
+        });
     } catch (error: any) {
         if (error.code === '23505') { res.status(409).json({ error: 'License No already exists' }); return; }
         res.status(500).json({ error: 'Failed to create Taqyees license', details: error.message });
@@ -136,18 +254,62 @@ export const getTaqyeesLicensesByStation = async (req: Request, res: Response): 
 
 export const updateTaqyeesLicense = async (req: Request, res: Response): Promise<void> => {
     try {
+        await ensureLicenseLifecycleSchema('taqyees_licenses');
+
         const { id } = req.params;
         const userId = (req as any).user?.id;
-        const fields = Object.entries(req.body).filter(([_, v]) => v !== undefined);
+        const submit = (req.body as any)?.submit;
+        const shouldSubmit = submit === true || submit === 'true';
+        const fields = Object.entries(req.body).filter(([k, v]) => k !== 'submit' && v !== undefined);
+
         if (fields.length === 0) { res.status(400).json({ error: 'No fields to update' }); return; }
+
         const setClause = fields.map(([k, _], i) => `${k.replace(/[A-Z]/g, l => `_${l.toLowerCase()}`)} = $${i + 1}`).join(', ');
         const result = await pool.query(
-            `UPDATE taqyees_licenses SET ${setClause}, updated_by = $${fields.length + 1}, updated_at = CURRENT_TIMESTAMP WHERE id = $${fields.length + 2} RETURNING *`,
-            [...fields.map(([_, v]) => v), userId, id]);
+            `UPDATE taqyees_licenses
+             SET ${setClause},
+                 is_submitted = $${fields.length + 1},
+                 submitted_at = CASE WHEN $${fields.length + 1} THEN CURRENT_TIMESTAMP ELSE submitted_at END,
+                 submitted_by = CASE WHEN $${fields.length + 1} THEN $${fields.length + 2} ELSE submitted_by END,
+                 last_saved_at = CASE WHEN $${fields.length + 1} THEN last_saved_at ELSE CURRENT_TIMESTAMP END,
+                 last_saved_by = CASE WHEN $${fields.length + 1} THEN last_saved_by ELSE $${fields.length + 2} END,
+                 updated_by = $${fields.length + 2},
+                 updated_at = CURRENT_TIMESTAMP
+             WHERE id = $${fields.length + 3}
+             RETURNING *`,
+            [...fields.map(([_, v]) => v), shouldSubmit, userId, id]
+        );
+
         if (result.rows.length === 0) { res.status(404).json({ error: 'Taqyees License not found' }); return; }
         res.status(200).json({ message: 'Taqyees License updated successfully', data: result.rows[0] });
     } catch (error: any) {
         res.status(500).json({ error: 'Failed to update Taqyees license', details: error.message });
+    }
+};
+
+export const getLatestSavedTaqyeesLicense = async (req: Request, res: Response): Promise<void> => {
+    try {
+        await ensureLicenseLifecycleSchema('taqyees_licenses');
+
+        const userId = (req as any).user?.id;
+        const stationCode = String(req.query?.stationCode || '').trim();
+        if (!userId) {
+            res.status(200).json({ data: null });
+            return;
+        }
+
+        const result = await pool.query(`
+            SELECT * FROM taqyees_licenses
+            WHERE is_submitted = FALSE
+              AND created_by = $1
+              AND ($2 = '' OR station_code = $2)
+            ORDER BY COALESCE(last_saved_at, updated_at, created_at) DESC
+            LIMIT 1
+        `, [userId, stationCode]);
+
+        res.status(200).json({ data: result.rows[0] || null });
+    } catch (error: any) {
+        res.status(500).json({ error: 'Failed to fetch latest saved Taqyees license', details: error.message });
     }
 };
 
@@ -161,16 +323,26 @@ export const deleteTaqyeesLicense = async (req: Request, res: Response): Promise
     }
 };
 
-// ─── ENVIRONMENTAL LICENSE ───────────────────────────────────────────────────
+// --- ENVIRONMENTAL LICENSE --------------------------------------------------
 export const createEnvironmentalLicense = async (req: Request, res: Response): Promise<void> => {
     try {
+        await ensureLicenseLifecycleSchema('environmental_licenses');
+
         const {
             issuanceNo, issuanceDate, licenseExpiryDate, numberOfDays, licenseStatus,
             facilityName, ownerName, address, facilityNo, geographicLocation,
             commercialRegister, workArea, businessType, orderNumber, orderDate,
-            phone, fax, mailBox, boxCode, city, issued, stationCode, officeCode
+            phone, fax, mailBox, boxCode, city, issued, stationCode, officeCode, submit
         } = req.body;
-        if (!issuanceNo || !stationCode) { res.status(400).json({ error: 'Issuance No and station code are required' }); return; }
+
+        const shouldSubmit = submit !== false;
+        const resolvedIssuanceNo = String(issuanceNo || '').trim() || `ENV-DRAFT-${Date.now()}`;
+
+        if (!stationCode || (shouldSubmit && !resolvedIssuanceNo)) {
+            res.status(400).json({ error: 'Station code is required. Submit also requires Issuance No.' });
+            return;
+        }
+
         const userId = (req as any).user?.id;
         const result = await pool.query(`
             INSERT INTO environmental_licenses (
@@ -181,11 +353,26 @@ export const createEnvironmentalLicense = async (req: Request, res: Response): P
                 created_by, updated_by
             ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$24)
             RETURNING *`,
-            [issuanceNo, issuanceDate || null, licenseExpiryDate || null, numberOfDays || 0, licenseStatus,
+            [resolvedIssuanceNo, issuanceDate || null, licenseExpiryDate || null, numberOfDays || 0, licenseStatus,
                 facilityName, ownerName, address, facilityNo, geographicLocation,
                 commercialRegister, workArea, businessType, orderNumber, orderDate || null,
                 phone, fax, mailBox, boxCode, city, issued, stationCode, officeCode, userId]);
-        res.status(201).json({ message: 'Environmental License created successfully', data: result.rows[0] });
+
+        await pool.query(`
+            UPDATE environmental_licenses
+            SET is_submitted = $1,
+                submitted_at = CASE WHEN $1 THEN CURRENT_TIMESTAMP ELSE NULL END,
+                submitted_by = CASE WHEN $1 THEN $2 ELSE NULL END,
+                last_saved_at = CASE WHEN $1 THEN NULL ELSE CURRENT_TIMESTAMP END,
+                last_saved_by = CASE WHEN $1 THEN NULL ELSE $2 END
+            WHERE id = $3
+        `, [shouldSubmit, userId || null, result.rows[0].id]);
+
+        const refreshed = await pool.query('SELECT * FROM environmental_licenses WHERE id = $1 LIMIT 1', [result.rows[0].id]);
+        res.status(201).json({
+            message: shouldSubmit ? 'Environmental License submitted successfully' : 'Environmental License saved successfully',
+            data: refreshed.rows[0],
+        });
     } catch (error: any) {
         if (error.code === '23505') { res.status(409).json({ error: 'Issuance No already exists' }); return; }
         res.status(500).json({ error: 'Failed to create Environmental license', details: error.message });
@@ -222,18 +409,62 @@ export const getEnvironmentalLicensesByStation = async (req: Request, res: Respo
 
 export const updateEnvironmentalLicense = async (req: Request, res: Response): Promise<void> => {
     try {
+        await ensureLicenseLifecycleSchema('environmental_licenses');
+
         const { id } = req.params;
         const userId = (req as any).user?.id;
-        const fields = Object.entries(req.body).filter(([_, v]) => v !== undefined);
+        const submit = (req.body as any)?.submit;
+        const shouldSubmit = submit === true || submit === 'true';
+        const fields = Object.entries(req.body).filter(([k, v]) => k !== 'submit' && v !== undefined);
+
         if (fields.length === 0) { res.status(400).json({ error: 'No fields to update' }); return; }
+
         const setClause = fields.map(([k, _], i) => `${k.replace(/[A-Z]/g, l => `_${l.toLowerCase()}`)} = $${i + 1}`).join(', ');
         const result = await pool.query(
-            `UPDATE environmental_licenses SET ${setClause}, updated_by = $${fields.length + 1}, updated_at = CURRENT_TIMESTAMP WHERE id = $${fields.length + 2} RETURNING *`,
-            [...fields.map(([_, v]) => v), userId, id]);
+            `UPDATE environmental_licenses
+             SET ${setClause},
+                 is_submitted = $${fields.length + 1},
+                 submitted_at = CASE WHEN $${fields.length + 1} THEN CURRENT_TIMESTAMP ELSE submitted_at END,
+                 submitted_by = CASE WHEN $${fields.length + 1} THEN $${fields.length + 2} ELSE submitted_by END,
+                 last_saved_at = CASE WHEN $${fields.length + 1} THEN last_saved_at ELSE CURRENT_TIMESTAMP END,
+                 last_saved_by = CASE WHEN $${fields.length + 1} THEN last_saved_by ELSE $${fields.length + 2} END,
+                 updated_by = $${fields.length + 2},
+                 updated_at = CURRENT_TIMESTAMP
+             WHERE id = $${fields.length + 3}
+             RETURNING *`,
+            [...fields.map(([_, v]) => v), shouldSubmit, userId, id]
+        );
+
         if (result.rows.length === 0) { res.status(404).json({ error: 'Environmental License not found' }); return; }
         res.status(200).json({ message: 'Environmental License updated successfully', data: result.rows[0] });
     } catch (error: any) {
         res.status(500).json({ error: 'Failed to update Environmental license', details: error.message });
+    }
+};
+
+export const getLatestSavedEnvironmentalLicense = async (req: Request, res: Response): Promise<void> => {
+    try {
+        await ensureLicenseLifecycleSchema('environmental_licenses');
+
+        const userId = (req as any).user?.id;
+        const stationCode = String(req.query?.stationCode || '').trim();
+        if (!userId) {
+            res.status(200).json({ data: null });
+            return;
+        }
+
+        const result = await pool.query(`
+            SELECT * FROM environmental_licenses
+            WHERE is_submitted = FALSE
+              AND created_by = $1
+              AND ($2 = '' OR station_code = $2)
+            ORDER BY COALESCE(last_saved_at, updated_at, created_at) DESC
+            LIMIT 1
+        `, [userId, stationCode]);
+
+        res.status(200).json({ data: result.rows[0] || null });
+    } catch (error: any) {
+        res.status(500).json({ error: 'Failed to fetch latest saved Environmental license', details: error.message });
     }
 };
 
@@ -247,7 +478,7 @@ export const deleteEnvironmentalLicense = async (req: Request, res: Response): P
     }
 };
 
-// ─── LICENSE ATTACHMENTS ─────────────────────────────────────────────────────
+// --- LICENSE ATTACHMENTS ----------------------------------------------------
 export const upsertLicenseAttachments = async (req: Request, res: Response): Promise<void> => {
     try {
         const { stationCode, operatingLicenseUrl, petroleumTradeLicenseUrl, civilDefenseCertificateUrl,

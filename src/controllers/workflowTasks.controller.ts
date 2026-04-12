@@ -129,11 +129,13 @@ export const getWorkflowTasks = async (req: AuthRequest, res: Response): Promise
                 p.workflow_path,
                 p.city,
                 au.username AS assigned_to_username,
-                aby.username AS assigned_by_username
+                aby.username AS assigned_by_username,
+                aup.username AS attachment_uploaded_by_username
             FROM project_workflow_tasks t
             JOIN investment_projects p ON p.id = t.investment_project_id
             LEFT JOIN users au ON au.id = t.assigned_to
             LEFT JOIN users aby ON aby.id = t.assigned_by
+            LEFT JOIN users aup ON aup.id = t.attachment_uploaded_by
         `;
         const params: unknown[] = [];
 
@@ -144,7 +146,7 @@ export const getWorkflowTasks = async (req: AuthRequest, res: Response): Promise
                 return;
             }
 
-            if (userRole === 'department_manager' || userRole === 'supervisor') {
+            if (userRole === 'department_manager') {
                 query += `
                     WHERE t.origin_department = $1
                        OR t.target_department = $1
@@ -152,7 +154,7 @@ export const getWorkflowTasks = async (req: AuthRequest, res: Response): Promise
                 `;
                 params.push(department, userId);
             } else {
-                // Employees/supervisors should only see tasks explicitly assigned to them.
+                // Supervisors/employees should only see tasks explicitly assigned to them.
                 query += ' WHERE t.assigned_to = $1';
                 params.push(userId);
             }
@@ -216,7 +218,11 @@ export const assignWorkflowTask = async (req: AuthRequest, res: Response): Promi
         await ensureWorkflowSchema();
 
         const { id } = req.params;
-        const { assignedToUserId, targetDepartment } = req.body as { assignedToUserId?: string; targetDepartment?: string };
+        const { assignedToUserId, targetDepartment, assigneeNote } = req.body as {
+            assignedToUserId?: string;
+            targetDepartment?: string;
+            assigneeNote?: string;
+        };
         const actorId = req.user?.id;
         const actorRole = req.user?.role;
         const actorDepartment = normalizeDepartment(req.user?.department);
@@ -275,6 +281,11 @@ export const assignWorkflowTask = async (req: AuthRequest, res: Response): Promi
                 res.status(403).json({ error: 'You are not allowed to assign this task' });
                 return;
             }
+
+            if (resolvedTargetDepartment !== actorDepartment) {
+                res.status(403).json({ error: 'Department managers and supervisors can only assign within their own department' });
+                return;
+            }
         }
 
         if (task.status !== 'manager_queue' || task.assigned_to) {
@@ -297,13 +308,14 @@ export const assignWorkflowTask = async (req: AuthRequest, res: Response): Promi
             SET assigned_to = $1,
                 assigned_by = $2,
                 target_department = $3,
+                assignee_note = $4,
                 status = 'assigned',
                 updated_at = CURRENT_TIMESTAMP
-            WHERE id = $4
+            WHERE id = $5
               AND status = 'manager_queue'
               AND assigned_to IS NULL
             RETURNING *
-        `, [assignedToUserId, actorId, resolvedTargetDepartment, id]);
+        `, [assignedToUserId, actorId, resolvedTargetDepartment, String(assigneeNote || '').trim() || null, id]);
 
         if (!result.rows.length) {
             res.status(409).json({ error: 'Task is already assigned and cannot be reassigned' });
@@ -320,6 +332,7 @@ export const assignWorkflowTask = async (req: AuthRequest, res: Response): Promi
             metadata: {
                 assignedToUserId,
                 targetDepartment: resolvedTargetDepartment,
+                assigneeNote: String(assigneeNote || '').trim() || null,
             },
         });
 
@@ -336,6 +349,7 @@ export const addManagerAttachment = async (req: AuthRequest, res: Response): Pro
         const { id } = req.params;
         const { attachmentUrl, note } = req.body as { attachmentUrl?: string; note?: string };
         const userRole = req.user?.role;
+        const userId = req.user?.id;
 
         if (!(userRole === 'department_manager' || userRole === 'super_admin')) {
             res.status(403).json({ error: 'Only department managers or super admin can add manager attachment' });
@@ -356,10 +370,14 @@ export const addManagerAttachment = async (req: AuthRequest, res: Response): Pro
             UPDATE project_workflow_tasks
             SET manager_attachment_url = $1,
                 manager_note = $2,
+                attachment_url = $1,
+                attachment_note = $2,
+                attachment_uploaded_by = $3,
+                attachment_uploaded_at = CURRENT_TIMESTAMP,
                 updated_at = CURRENT_TIMESTAMP
-            WHERE id = $3
+            WHERE id = $4
             RETURNING *
-        `, [attachmentUrl, note || null, id]);
+        `, [attachmentUrl, note || null, userId || null, id]);
 
         if (!result.rows.length) {
             res.status(404).json({ error: 'Task not found' });
@@ -412,11 +430,15 @@ export const submitEmployeeAttachment = async (req: AuthRequest, res: Response):
             return;
         }
 
-        const resolvedEmployeeAttachment = normalizedAttachmentUrl || task.employee_attachment_url;
-        const hasAtLeastOneAttachment = Boolean(task.manager_attachment_url || resolvedEmployeeAttachment);
+        const resolvedAttachment =
+            normalizedAttachmentUrl
+            || task.attachment_url
+            || task.employee_attachment_url
+            || task.manager_attachment_url;
+        const hasAtLeastOneAttachment = Boolean(resolvedAttachment);
         if (!hasAtLeastOneAttachment) {
             res.status(400).json({
-                error: 'At least one attachment is required. Upload manager or employee attachment before submitting.',
+                error: 'Attachment is required before submitting.',
             });
             return;
         }
@@ -427,11 +449,15 @@ export const submitEmployeeAttachment = async (req: AuthRequest, res: Response):
             UPDATE project_workflow_tasks
             SET employee_attachment_url = $1,
                 employee_note = $2,
-                status = $3,
+                attachment_url = $1,
+                attachment_note = $2,
+                attachment_uploaded_by = $3,
+                attachment_uploaded_at = CURRENT_TIMESTAMP,
+                status = $4,
                 updated_at = CURRENT_TIMESTAMP
-            WHERE id = $4
+            WHERE id = $5
             RETURNING *
-        `, [resolvedEmployeeAttachment, note || null, nextStatus, id]);
+        `, [resolvedAttachment, note || null, userId, nextStatus, id]);
 
         await recordWorkflowTransition({
             entityType: 'workflow_task',
@@ -441,8 +467,8 @@ export const submitEmployeeAttachment = async (req: AuthRequest, res: Response):
             changedBy: userId,
             note: note || 'Employee submitted attachment',
             metadata: {
-                attachmentUrl: resolvedEmployeeAttachment,
-                usedManagerAttachmentOnly: !normalizedAttachmentUrl && Boolean(task.manager_attachment_url),
+                attachmentUrl: resolvedAttachment,
+                usedExistingAttachment: !normalizedAttachmentUrl,
                 branchWorkflow: Boolean(task.workflow_path),
             },
         });
@@ -684,9 +710,10 @@ export const reviewWorkflowTask = async (req: AuthRequest, res: Response): Promi
             return;
         }
 
-        if (!task.manager_attachment_url && !task.employee_attachment_url) {
+        const hasAttachment = Boolean(task.attachment_url || task.manager_attachment_url || task.employee_attachment_url);
+        if (!hasAttachment) {
             res.status(400).json({
-                error: 'Review cannot proceed without an attachment. At least one manager or employee file is required.',
+                error: 'Review cannot proceed without an attachment.',
             });
             return;
         }
@@ -767,11 +794,13 @@ export const getWorkflowTaskHistory = async (req: AuthRequest, res: Response): P
                 p.department_type,
                 p.workflow_path,
                 au.username AS assigned_to_username,
-                aby.username AS assigned_by_username
+                aby.username AS assigned_by_username,
+                aup.username AS attachment_uploaded_by_username
             FROM project_workflow_tasks t
             JOIN investment_projects p ON p.id = t.investment_project_id
             LEFT JOIN users au ON au.id = t.assigned_to
             LEFT JOIN users aby ON aby.id = t.assigned_by
+            LEFT JOIN users aup ON aup.id = t.attachment_uploaded_by
             WHERE t.id = $1
             LIMIT 1
         `, [id]);
@@ -933,11 +962,15 @@ export const submitManagerAttachment = async (req: AuthRequest, res: Response): 
             UPDATE project_workflow_tasks
             SET manager_attachment_url = $1,
                 manager_note = $2,
+                attachment_url = $1,
+                attachment_note = $2,
+                attachment_uploaded_by = $3,
+                attachment_uploaded_at = CURRENT_TIMESTAMP,
                 status = 'under_super_admin_review',
                 updated_at = CURRENT_TIMESTAMP
-            WHERE id = $3
+            WHERE id = $4
             RETURNING *
-        `, [normalizedAttachmentUrl, note || null, id]);
+        `, [normalizedAttachmentUrl, note || null, userId, id]);
 
         await recordWorkflowTransition({
             entityType: 'workflow_task',

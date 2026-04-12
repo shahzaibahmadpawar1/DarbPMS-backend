@@ -1,12 +1,38 @@
 import { Request, Response } from 'express';
 import pool from '../config/database';
 
+let nozzleLifecycleReady = false;
+
+const ensureNozzleLifecycleSchema = async (): Promise<void> => {
+    if (nozzleLifecycleReady) return;
+
+    await pool.query(`ALTER TABLE nozzles ADD COLUMN IF NOT EXISTS is_submitted BOOLEAN NOT NULL DEFAULT TRUE;`);
+    await pool.query(`ALTER TABLE nozzles ADD COLUMN IF NOT EXISTS submitted_at TIMESTAMP WITH TIME ZONE;`);
+    await pool.query(`ALTER TABLE nozzles ADD COLUMN IF NOT EXISTS submitted_by UUID REFERENCES users(id) ON DELETE SET NULL;`);
+    await pool.query(`ALTER TABLE nozzles ADD COLUMN IF NOT EXISTS last_saved_at TIMESTAMP WITH TIME ZONE;`);
+    await pool.query(`ALTER TABLE nozzles ADD COLUMN IF NOT EXISTS last_saved_by UUID REFERENCES users(id) ON DELETE SET NULL;`);
+
+    await pool.query(`
+        UPDATE nozzles
+        SET is_submitted = TRUE,
+            submitted_at = COALESCE(submitted_at, created_at),
+            submitted_by = COALESCE(submitted_by, created_by)
+        WHERE is_submitted IS DISTINCT FROM TRUE;
+    `);
+
+    nozzleLifecycleReady = true;
+};
+
 export const createNozzle = async (req: Request, res: Response): Promise<void> => {
     try {
-        const { nozzleSerialNumber, fuelType, vendor, dispenserSerialNumber } = req.body;
+        await ensureNozzleLifecycleSchema();
 
-        if (!nozzleSerialNumber || !dispenserSerialNumber) {
-            res.status(400).json({ error: 'Nozzle serial number and dispenser serial number are required' });
+        const { nozzleSerialNumber, fuelType, vendor, dispenserSerialNumber, submit } = req.body;
+        const shouldSubmit = submit !== false;
+        const resolvedNozzleSerialNumber = String(nozzleSerialNumber || '').trim() || `NOZ-${Date.now()}`;
+
+        if (!dispenserSerialNumber || (shouldSubmit && !resolvedNozzleSerialNumber)) {
+            res.status(400).json({ error: 'Dispenser serial number is required. Submit also requires nozzle serial number.' });
             return;
         }
 
@@ -17,10 +43,25 @@ export const createNozzle = async (req: Request, res: Response): Promise<void> =
             RETURNING *
         `;
 
-        const values = [nozzleSerialNumber, fuelType, vendor, dispenserSerialNumber, userId];
+        const values = [resolvedNozzleSerialNumber, fuelType, vendor, dispenserSerialNumber, userId];
         const result = await pool.query(query, values);
 
-        res.status(201).json({ message: 'Nozzle created successfully', data: result.rows[0] });
+        await pool.query(`
+            UPDATE nozzles
+            SET is_submitted = $1,
+                submitted_at = CASE WHEN $1 THEN CURRENT_TIMESTAMP ELSE NULL END,
+                submitted_by = CASE WHEN $1 THEN $2 ELSE NULL END,
+                last_saved_at = CASE WHEN $1 THEN NULL ELSE CURRENT_TIMESTAMP END,
+                last_saved_by = CASE WHEN $1 THEN NULL ELSE $2 END
+            WHERE nozzle_serial_number = $3
+        `, [shouldSubmit, userId || null, result.rows[0].nozzle_serial_number]);
+
+        const refreshed = await pool.query('SELECT * FROM nozzles WHERE nozzle_serial_number = $1 LIMIT 1', [result.rows[0].nozzle_serial_number]);
+
+        res.status(201).json({
+            message: shouldSubmit ? 'Nozzle submitted successfully' : 'Nozzle saved successfully',
+            data: refreshed.rows[0],
+        });
     } catch (error: any) {
         console.error('Error creating nozzle:', error);
         if (error.code === '23505') {
@@ -80,8 +121,11 @@ export const getNozzleBySerialNumber = async (req: Request, res: Response): Prom
 
 export const updateNozzle = async (req: Request, res: Response): Promise<void> => {
     try {
+        await ensureNozzleLifecycleSchema();
+
         const { serialNumber } = req.params;
-        const { fuelType, vendor, dispenserSerialNumber } = req.body;
+        const { fuelType, vendor, dispenserSerialNumber, submit } = req.body;
+        const shouldSubmit = submit === true || submit === 'true';
         const userId = (req as any).user?.id;
 
         const query = `
@@ -89,13 +133,18 @@ export const updateNozzle = async (req: Request, res: Response): Promise<void> =
             SET fuel_type = COALESCE($1, fuel_type),
                 vendor = COALESCE($2, vendor),
                 dispenser_serial_number = COALESCE($3, dispenser_serial_number),
-                updated_by = $4,
+                is_submitted = $4,
+                submitted_at = CASE WHEN $4 THEN CURRENT_TIMESTAMP ELSE submitted_at END,
+                submitted_by = CASE WHEN $4 THEN $5 ELSE submitted_by END,
+                last_saved_at = CASE WHEN $4 THEN last_saved_at ELSE CURRENT_TIMESTAMP END,
+                last_saved_by = CASE WHEN $4 THEN last_saved_by ELSE $5 END,
+                updated_by = $5,
                 updated_at = CURRENT_TIMESTAMP
-            WHERE nozzle_serial_number = $5
+            WHERE nozzle_serial_number = $6
             RETURNING *
         `;
 
-        const values = [fuelType, vendor, dispenserSerialNumber, userId, serialNumber];
+        const values = [fuelType, vendor, dispenserSerialNumber, shouldSubmit, userId, serialNumber];
         const result = await pool.query(query, values);
 
         if (result.rows.length === 0) {
@@ -106,6 +155,31 @@ export const updateNozzle = async (req: Request, res: Response): Promise<void> =
     } catch (error) {
         console.error('Error updating nozzle:', error);
         res.status(500).json({ error: 'Failed to update nozzle' });
+    }
+};
+
+export const getLatestSavedNozzle = async (req: Request, res: Response): Promise<void> => {
+    try {
+        await ensureNozzleLifecycleSchema();
+
+        const userId = (req as any).user?.id;
+        if (!userId) {
+            res.status(200).json({ data: null });
+            return;
+        }
+
+        const result = await pool.query(`
+            SELECT * FROM nozzles
+            WHERE is_submitted = FALSE
+              AND created_by = $1
+            ORDER BY COALESCE(last_saved_at, updated_at, created_at) DESC
+            LIMIT 1
+        `, [userId]);
+
+        res.status(200).json({ data: result.rows[0] || null });
+    } catch (error) {
+        console.error('Error fetching latest saved nozzle:', error);
+        res.status(500).json({ error: 'Failed to fetch latest saved nozzle' });
     }
 };
 

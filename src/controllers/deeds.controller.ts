@@ -1,16 +1,43 @@
 import { Request, Response } from 'express';
 import pool from '../config/database';
 
+let deedLifecycleReady = false;
+
+const ensureDeedLifecycleSchema = async (): Promise<void> => {
+    if (deedLifecycleReady) return;
+
+    await pool.query(`ALTER TABLE deeds ADD COLUMN IF NOT EXISTS is_submitted BOOLEAN NOT NULL DEFAULT TRUE;`);
+    await pool.query(`ALTER TABLE deeds ADD COLUMN IF NOT EXISTS submitted_at TIMESTAMP WITH TIME ZONE;`);
+    await pool.query(`ALTER TABLE deeds ADD COLUMN IF NOT EXISTS submitted_by UUID REFERENCES users(id) ON DELETE SET NULL;`);
+    await pool.query(`ALTER TABLE deeds ADD COLUMN IF NOT EXISTS last_saved_at TIMESTAMP WITH TIME ZONE;`);
+    await pool.query(`ALTER TABLE deeds ADD COLUMN IF NOT EXISTS last_saved_by UUID REFERENCES users(id) ON DELETE SET NULL;`);
+
+    await pool.query(`
+        UPDATE deeds
+        SET is_submitted = TRUE,
+            submitted_at = COALESCE(submitted_at, created_at),
+            submitted_by = COALESCE(submitted_by, created_by)
+        WHERE is_submitted IS DISTINCT FROM TRUE;
+    `);
+
+    deedLifecycleReady = true;
+};
+
 export const createDeed = async (req: Request, res: Response): Promise<void> => {
     try {
+        await ensureDeedLifecycleSchema();
+
         const {
             deedNo, deedDate, deedIssueBy, realEstateUnitNumber, area,
             nationality, percentage, address, idType, idDate, landNo,
-            blockNumber, district, city, unitType, statusCode, stationCode
+            blockNumber, district, city, unitType, statusCode, stationCode, submit
         } = req.body;
 
-        if (!deedNo || !stationCode) {
-            res.status(400).json({ error: 'Deed No and station code are required' });
+        const shouldSubmit = submit !== false;
+        const resolvedDeedNo = String(deedNo || '').trim() || `DEED-DRAFT-${Date.now()}`;
+
+        if (!stationCode || (shouldSubmit && !resolvedDeedNo)) {
+            res.status(400).json({ error: 'Station code is required. Submit also requires deed number.' });
             return;
         }
 
@@ -27,13 +54,28 @@ export const createDeed = async (req: Request, res: Response): Promise<void> => 
         `;
 
         const values = [
-            deedNo, deedDate || null, deedIssueBy, realEstateUnitNumber, area || 0,
+            resolvedDeedNo, deedDate || null, deedIssueBy, realEstateUnitNumber, area || 0,
             nationality, percentage || 0, address, idType, idDate || null, landNo,
             blockNumber, district, city, unitType, statusCode, stationCode, userId
         ];
         const result = await pool.query(query, values);
 
-        res.status(201).json({ message: 'Deed information created successfully', data: result.rows[0] });
+        await pool.query(`
+            UPDATE deeds
+            SET is_submitted = $1,
+                submitted_at = CASE WHEN $1 THEN CURRENT_TIMESTAMP ELSE NULL END,
+                submitted_by = CASE WHEN $1 THEN $2 ELSE NULL END,
+                last_saved_at = CASE WHEN $1 THEN NULL ELSE CURRENT_TIMESTAMP END,
+                last_saved_by = CASE WHEN $1 THEN NULL ELSE $2 END
+            WHERE id = $3
+        `, [shouldSubmit, userId || null, result.rows[0].id]);
+
+        const refreshed = await pool.query('SELECT * FROM deeds WHERE id = $1 LIMIT 1', [result.rows[0].id]);
+
+        res.status(201).json({
+            message: shouldSubmit ? 'Deed information submitted successfully' : 'Deed information saved successfully',
+            data: refreshed.rows[0],
+        });
     } catch (error: any) {
         console.error('Error creating deed:', error);
         if (error.code === '23505') {
@@ -80,12 +122,15 @@ export const getDeedsByStation = async (req: Request, res: Response): Promise<vo
 
 export const updateDeed = async (req: Request, res: Response): Promise<void> => {
     try {
+        await ensureDeedLifecycleSchema();
+
         const { id } = req.params;
         const {
             deedNo, deedDate, deedIssueBy, realEstateUnitNumber, area,
             nationality, percentage, address, idType, idDate, landNo,
-            blockNumber, district, city, unitType, statusCode, stationCode
+            blockNumber, district, city, unitType, statusCode, stationCode, submit
         } = req.body;
+        const shouldSubmit = submit === true || submit === 'true';
         const userId = (req as any).user?.id;
 
         const query = `
@@ -107,16 +152,21 @@ export const updateDeed = async (req: Request, res: Response): Promise<void> => 
                 unit_type = COALESCE($15, unit_type),
                 status_code = COALESCE($16, status_code),
                 station_code = COALESCE($17, station_code),
-                updated_by = $18,
+                is_submitted = $18,
+                submitted_at = CASE WHEN $18 THEN CURRENT_TIMESTAMP ELSE submitted_at END,
+                submitted_by = CASE WHEN $18 THEN $19 ELSE submitted_by END,
+                last_saved_at = CASE WHEN $18 THEN last_saved_at ELSE CURRENT_TIMESTAMP END,
+                last_saved_by = CASE WHEN $18 THEN last_saved_by ELSE $19 END,
+                updated_by = $19,
                 updated_at = CURRENT_TIMESTAMP
-            WHERE id = $19
+            WHERE id = $20
             RETURNING *
         `;
 
         const values = [
             deedNo, deedDate, deedIssueBy, realEstateUnitNumber, area,
             nationality, percentage, address, idType, idDate, landNo,
-            blockNumber, district, city, unitType, statusCode, stationCode, userId, id
+            blockNumber, district, city, unitType, statusCode, stationCode, shouldSubmit, userId, id
         ];
         const result = await pool.query(query, values);
 
@@ -131,6 +181,33 @@ export const updateDeed = async (req: Request, res: Response): Promise<void> => 
             error: 'Failed to update deed',
             details: error.message
         });
+    }
+};
+
+export const getLatestSavedDeed = async (req: Request, res: Response): Promise<void> => {
+    try {
+        await ensureDeedLifecycleSchema();
+
+        const userId = (req as any).user?.id;
+        const stationCode = String(req.query?.stationCode || '').trim();
+        if (!userId) {
+            res.status(200).json({ data: null });
+            return;
+        }
+
+        const result = await pool.query(`
+            SELECT * FROM deeds
+            WHERE is_submitted = FALSE
+              AND created_by = $1
+              AND ($2 = '' OR station_code = $2)
+            ORDER BY COALESCE(last_saved_at, updated_at, created_at) DESC
+            LIMIT 1
+        `, [userId, stationCode]);
+
+        res.status(200).json({ data: result.rows[0] || null });
+    } catch (error: any) {
+        console.error('Error fetching latest saved deed:', error);
+        res.status(500).json({ error: 'Failed to fetch latest saved deed', details: error.message });
     }
 };
 
