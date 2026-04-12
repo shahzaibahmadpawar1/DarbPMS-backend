@@ -25,6 +25,7 @@ import surveyReportsRoutes from './routes/surveyReports.routes';
 import pool from './config/database';
 import { authenticateToken } from './middleware/auth';
 import { ensureWorkflowSchema } from './utils/workflow';
+import { ensureActivitySchema, normalizeActivityScope, recordActivity } from './utils/activity';
 import { ensureSupabaseBucketExists } from './config/supabase';
 import { ensureSurveySchema } from './utils/survey';
 import { isSchemaCompatibilityError } from './utils/dbErrors';
@@ -288,6 +289,51 @@ const buildDashboardStationQuery = (bucket: ReturnType<typeof normalizeDashboard
     };
 };
 
+const inferEntityTypeFromPath = (path: string): string => {
+    if (path.startsWith('/api/stations')) return 'station_information';
+    if (path.startsWith('/api/cameras')) return 'cameras';
+    if (path.startsWith('/api/dispensers')) return 'dispensers';
+    if (path.startsWith('/api/nozzles')) return 'nozzles';
+    if (path.startsWith('/api/tanks')) return 'tanks';
+    if (path.startsWith('/api/areas')) return 'areas';
+    if (path.startsWith('/api/owners')) return 'owners';
+    if (path.startsWith('/api/deeds')) return 'deeds';
+    if (path.startsWith('/api/building-permits')) return 'building_permits';
+    if (path.startsWith('/api/contracts')) return 'contracts';
+    if (path.startsWith('/api/commercial-licenses')) return 'commercial_licenses';
+    if (path.startsWith('/api/energy-licenses')) return 'energy_licenses';
+    if (path.startsWith('/api/government-licenses')) return 'government_licenses';
+    if (path.startsWith('/api/investment-projects')) return 'investment_project';
+    if (path.startsWith('/api/tasks')) return 'workflow_task';
+    if (path.startsWith('/api/files')) return 'file_upload';
+    if (path.startsWith('/api/survey-reports')) return 'survey_report';
+    if (path.startsWith('/api/auth')) return 'auth';
+    return 'system';
+};
+
+const inferActionFromRequest = (method: string, path: string): string => {
+    const normalizedMethod = method.toUpperCase();
+    const lowerPath = path.toLowerCase();
+
+    if (lowerPath.includes('/manager-validate')) return 'validate';
+    if (lowerPath.includes('/review')) return 'review';
+    if (lowerPath.includes('/manager-submit') || lowerPath.includes('/employee-submit')) return 'submit';
+    if (lowerPath.includes('/assign')) return 'assign';
+    if (lowerPath.includes('/manager-attachment') || lowerPath.includes('/upload')) return 'upload';
+    if (lowerPath.includes('/bulk')) return 'bulk_import';
+
+    if (normalizedMethod === 'POST') return 'create';
+    if (normalizedMethod === 'PUT' || normalizedMethod === 'PATCH') return 'update';
+    if (normalizedMethod === 'DELETE') return 'delete';
+    return normalizedMethod.toLowerCase();
+};
+
+const buildActivitySummary = (action: string, entityType: string): string => {
+    const humanAction = action.replace(/_/g, ' ');
+    const humanEntity = entityType.replace(/_/g, ' ');
+    return `${humanAction} ${humanEntity}`.trim();
+};
+
 app.use(cors(corsOptions));
 app.options('*', cors(corsOptions));
 app.use(compression());
@@ -297,6 +343,44 @@ app.use(express.urlencoded({ extended: true }));
 // Request logging middleware
 app.use((req: Request, _res: Response, next: NextFunction) => {
     console.log(`${new Date().toISOString()} - ${req.method} ${req.path}`);
+    next();
+});
+
+app.use((req: Request, res: Response, next: NextFunction) => {
+    res.on('finish', () => {
+        const method = req.method.toUpperCase();
+        const isWriteMethod = method === 'POST' || method === 'PUT' || method === 'PATCH' || method === 'DELETE';
+        const path = req.path;
+
+        if (!isWriteMethod) return;
+        if (!path.startsWith('/api/')) return;
+        if (path.startsWith('/api/dashboard/activities')) return;
+        if (path.startsWith('/api/auth/login') || path.startsWith('/api/auth/register')) return;
+        if (res.statusCode < 200 || res.statusCode >= 400) return;
+
+        const authReq = req as any;
+        const actorId = authReq.user?.id || null;
+        if (!actorId) return;
+
+        const entityType = inferEntityTypeFromPath(path);
+        const action = inferActionFromRequest(method, path);
+
+        void recordActivity({
+            actorId,
+            action,
+            entityType,
+            entityId: req.params?.id || req.params?.stationCode || null,
+            summary: buildActivitySummary(action, entityType),
+            metadata: {
+                statusCode: res.statusCode,
+            },
+            sourcePath: path,
+            requestMethod: method,
+        }).catch((error) => {
+            console.error('Activity auto-log failed:', error);
+        });
+    });
+
     next();
 });
 
@@ -379,6 +463,10 @@ app.use('/api/survey-reports', surveyReportsRoutes);
 
 ensureWorkflowSchema().catch((error) => {
     console.error('Workflow schema bootstrap failed:', error);
+});
+
+ensureActivitySchema().catch((error) => {
+    console.error('Activity schema bootstrap failed:', error);
 });
 
 ensureSupabaseBucketExists().catch((error) => {
@@ -526,6 +614,82 @@ app.get('/api/dashboard/stats', authenticateToken, async (req: Request, res: Res
             return;
         }
         res.status(500).json({ error: 'Failed to fetch dashboard stats', details: error.message });
+    }
+});
+
+app.get('/api/dashboard/activities', authenticateToken, async (req: Request, res: Response) => {
+    try {
+        const authReq = req as any;
+        const userId = String(authReq.user?.id || '');
+        const userRole = String(authReq.user?.role || '');
+
+        if (!userId) {
+            res.status(401).json({ error: 'Authentication required' });
+            return;
+        }
+
+        const requestedScope = normalizeActivityScope((req.query as any)?.scope);
+        const scope = userRole === 'super_admin' ? requestedScope : 'mine';
+
+        const limitInput = Number.parseInt(String((req.query as any)?.limit || '20'), 10);
+        const offsetInput = Number.parseInt(String((req.query as any)?.offset || '0'), 10);
+        const limit = Number.isFinite(limitInput) && limitInput > 0 ? Math.min(limitInput, 200) : 20;
+        const offset = Number.isFinite(offsetInput) && offsetInput >= 0 ? offsetInput : 0;
+
+        const whereClause = scope === 'all' ? '' : 'WHERE a.actor_id = $1';
+        const params: unknown[] = scope === 'all' ? [] : [userId];
+
+        params.push(limit, offset);
+        const limitParam = params.length - 1;
+        const offsetParam = params.length;
+
+        const query = `
+            SELECT
+                a.id,
+                a.actor_id,
+                COALESCE(NULLIF(u.full_name, ''), u.username, 'System') AS actor_name,
+                a.action,
+                a.entity_type,
+                a.entity_id,
+                a.summary,
+                a.details,
+                a.metadata,
+                a.source_path,
+                a.request_method,
+                a.created_at
+            FROM activity_events a
+            LEFT JOIN users u ON u.id = a.actor_id
+            ${whereClause}
+            ORDER BY a.created_at DESC
+            LIMIT $${limitParam}
+            OFFSET $${offsetParam}
+        `;
+
+        const countQuery = `
+            SELECT COUNT(*)::int AS total
+            FROM activity_events a
+            ${whereClause}
+        `;
+
+        const [rowsResult, countResult] = await Promise.all([
+            pool.query(query, params),
+            pool.query(countQuery, scope === 'all' ? [] : [userId]),
+        ]);
+
+        res.status(200).json({
+            scope,
+            limit,
+            offset,
+            total: countResult.rows[0]?.total || 0,
+            data: rowsResult.rows,
+        });
+    } catch (error: any) {
+        console.error('Dashboard activities error:', error);
+        if (isSchemaCompatibilityError(error)) {
+            res.status(200).json({ scope: 'mine', limit: 20, offset: 0, total: 0, data: [] });
+            return;
+        }
+        res.status(500).json({ error: 'Failed to fetch activity history', details: error.message });
     }
 });
 

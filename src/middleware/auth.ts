@@ -97,7 +97,7 @@ const hydrateUserFromDb = async (req: AuthRequest): Promise<boolean> => {
 
 const resolveStationIdentifier = async (
     identifier: string
-): Promise<{ stationCode: string; department: 'investment' | 'franchise' | null } | null> => {
+): Promise<{ stationCode: string; department: Department | null } | null> => {
     const result = await pool.query(
         `
             SELECT station_code, station_type_code

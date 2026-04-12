@@ -3,6 +3,7 @@ import jwt from 'jsonwebtoken';
 import { UserModel } from '../models/user.model';
 import { RegisterRequest, LoginRequest, AuthResponse, AuthRequest, Department, UserResponse, UserRole, UserStatus, UserType } from '../types';
 import { normalizeUserRole } from '../utils/roles';
+import { recordActivity } from '../utils/activity';
 
 const validRoles: UserRole[] = ['super_admin', 'department_manager', 'supervisor', 'employee'];
 const validDepartments: Department[] = [
@@ -189,6 +190,19 @@ export class AuthController {
                 { expiresIn: '24h' }
             );
 
+            void recordActivity({
+                actorId: user.id,
+                action: 'register',
+                entityType: 'auth',
+                entityId: user.id,
+                summary: 'register account',
+                metadata: { username: user.username },
+                sourcePath: '/api/auth/register',
+                requestMethod: 'POST',
+            }).catch((activityError) => {
+                console.error('Auth register activity log failed:', activityError);
+            });
+
             res.status(201).json({
                 success: true,
                 message: 'User registered successfully',
@@ -268,6 +282,19 @@ export class AuthController {
                 jwtSecret,
                 { expiresIn: '24h' }
             );
+
+            void recordActivity({
+                actorId: user.id,
+                action: 'login',
+                entityType: 'auth',
+                entityId: user.id,
+                summary: 'login account',
+                metadata: { username: user.username },
+                sourcePath: '/api/auth/login',
+                requestMethod: 'POST',
+            }).catch((activityError) => {
+                console.error('Auth login activity log failed:', activityError);
+            });
 
             res.status(200).json({
                 success: true,
