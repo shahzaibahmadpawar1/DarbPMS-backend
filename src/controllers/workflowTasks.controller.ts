@@ -109,7 +109,6 @@ export const getWorkflowTasks = async (req: AuthRequest, res: Response): Promise
                 query += `
                     WHERE t.origin_department = $1
                        OR t.target_department = $1
-                       OR t.assigned_by = $2
                        OR t.assigned_to = $2
                 `;
                 params.push(department, userId);
@@ -181,6 +180,7 @@ export const assignWorkflowTask = async (req: AuthRequest, res: Response): Promi
         const { assignedToUserId, targetDepartment } = req.body as { assignedToUserId?: string; targetDepartment?: string };
         const actorId = req.user?.id;
         const actorRole = req.user?.role;
+        const actorDepartment = normalizeDepartment(req.user?.department);
 
         if (!actorId || !actorRole) {
             res.status(401).json({ error: 'Unauthorized' });
@@ -210,7 +210,7 @@ export const assignWorkflowTask = async (req: AuthRequest, res: Response): Promi
         }
 
         const taskLookup = await pool.query(`
-            SELECT t.status, t.assigned_to, p.workflow_path
+            SELECT t.status, t.assigned_to, t.origin_department, t.target_department, p.workflow_path
             FROM project_workflow_tasks t
             JOIN investment_projects p ON p.id = t.investment_project_id
             WHERE t.id = $1
@@ -222,6 +222,22 @@ export const assignWorkflowTask = async (req: AuthRequest, res: Response): Promi
         }
 
         const task = taskLookup.rows[0];
+
+        if (actorRole !== 'super_admin') {
+            if (!actorDepartment) {
+                res.status(403).json({ error: 'Department is required for this action' });
+                return;
+            }
+
+            const belongsToActorDepartment =
+                task.origin_department === actorDepartment || task.target_department === actorDepartment;
+
+            if (!belongsToActorDepartment && task.assigned_to !== actorId) {
+                res.status(403).json({ error: 'You are not allowed to assign this task' });
+                return;
+            }
+        }
+
         if (task.status !== 'manager_queue' || task.assigned_to) {
             res.status(409).json({ error: 'Task is already assigned and cannot be reassigned' });
             return;
@@ -411,6 +427,7 @@ export const managerValidateWorkflowTask = async (req: AuthRequest, res: Respons
         const { comment } = req.body as { comment?: string };
         const userId = req.user?.id;
         const userRole = req.user?.role;
+        const userDepartment = normalizeDepartment(req.user?.department);
 
         if (!userId || !userRole) {
             res.status(401).json({ error: 'Unauthorized' });
@@ -436,6 +453,22 @@ export const managerValidateWorkflowTask = async (req: AuthRequest, res: Respons
         }
 
         const task = taskLookup.rows[0];
+
+        if (userRole !== 'super_admin') {
+            if (!userDepartment) {
+                res.status(403).json({ error: 'Department is required for this action' });
+                return;
+            }
+
+            const belongsToActorDepartment =
+                task.origin_department === userDepartment || task.target_department === userDepartment;
+
+            if (!belongsToActorDepartment && task.assigned_to !== userId) {
+                res.status(403).json({ error: 'You are not allowed to validate this task' });
+                return;
+            }
+        }
+
         if (task.workflow_path) {
             res.status(409).json({ error: 'Manager validation is only allowed for initial review stage' });
             return;
