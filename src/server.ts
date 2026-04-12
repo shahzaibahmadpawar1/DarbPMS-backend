@@ -1,5 +1,6 @@
 import express, { Request, Response, NextFunction } from 'express';
 import cors from 'cors';
+import compression from 'compression';
 import dotenv from 'dotenv';
 import { CorsOptions } from 'cors';
 import authRoutes from './routes/auth.routes';
@@ -289,6 +290,7 @@ const buildDashboardStationQuery = (bucket: ReturnType<typeof normalizeDashboard
 
 app.use(cors(corsOptions));
 app.options('*', cors(corsOptions));
+app.use(compression());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
