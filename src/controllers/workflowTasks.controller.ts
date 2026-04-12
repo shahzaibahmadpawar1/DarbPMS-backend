@@ -123,26 +123,28 @@ export const getWorkflowTasks = async (req: AuthRequest, res: Response): Promise
         let query = `
             SELECT
                 t.*,
-                p.project_name,
-                p.project_code,
+                COALESCE(p.project_name, t.title) AS project_name,
+                COALESCE(p.project_code, t.id::text) AS project_code,
                 p.review_status,
                 p.department_type,
                 p.workflow_path,
                 p.city,
                 au.username AS assigned_to_username,
                 aby.username AS assigned_by_username,
-                aup.username AS attachment_uploaded_by_username
+                aup.username AS attachment_uploaded_by_username,
+                acu.username AS created_by_username
             FROM project_workflow_tasks t
-            JOIN investment_projects p ON p.id = t.investment_project_id
+            LEFT JOIN investment_projects p ON p.id = t.investment_project_id
             LEFT JOIN users au ON au.id = t.assigned_to
             LEFT JOIN users aby ON aby.id = t.assigned_by
             LEFT JOIN users aup ON aup.id = t.attachment_uploaded_by
+            LEFT JOIN users acu ON acu.id = t.created_by
         `;
         const params: unknown[] = [];
 
         if (userRole !== 'super_admin') {
             const department = normalizeDepartment(userDepartment);
-            if (!department) {
+            if (!department && userRole === 'department_manager') {
                 res.status(403).json({ error: 'Department is required for this action' });
                 return;
             }
@@ -152,11 +154,12 @@ export const getWorkflowTasks = async (req: AuthRequest, res: Response): Promise
                     WHERE t.origin_department = $1
                        OR t.target_department = $1
                        OR t.assigned_to = $2
+                       OR t.created_by = $2
                 `;
                 params.push(department, userId);
             } else {
                 // Supervisors/employees should only see tasks explicitly assigned to them.
-                query += ' WHERE t.assigned_to = $1';
+                query += ' WHERE t.assigned_to = $1 OR t.created_by = $1';
                 params.push(userId);
             }
         }
@@ -680,8 +683,8 @@ export const reviewWorkflowTask = async (req: AuthRequest, res: Response): Promi
         const userRole = req.user?.role;
         const userId = req.user?.id;
 
-        if (userRole !== 'super_admin' || !userId) {
-            res.status(403).json({ error: 'Only super admin can review workflow tasks' });
+        if (!userId || !userRole) {
+            res.status(401).json({ error: 'Unauthorized' });
             return;
         }
 
@@ -691,7 +694,13 @@ export const reviewWorkflowTask = async (req: AuthRequest, res: Response): Promi
             return;
         }
 
-        const taskLookup = await pool.query('SELECT * FROM project_workflow_tasks WHERE id = $1 LIMIT 1', [id]);
+        const taskLookup = await pool.query(`
+            SELECT t.*, p.workflow_path, p.review_status
+            FROM project_workflow_tasks t
+            LEFT JOIN investment_projects p ON p.id = t.investment_project_id
+            WHERE t.id = $1
+            LIMIT 1
+        `, [id]);
         if (!taskLookup.rows.length) {
             res.status(404).json({ error: 'Task not found' });
             return;
@@ -699,6 +708,93 @@ export const reviewWorkflowTask = async (req: AuthRequest, res: Response): Promi
 
         const task = taskLookup.rows[0];
         const oldTaskState = task.status;
+
+        const isGenericTask = task.flow_type === 'request' || task.flow_type === 'ceo_contact' || !task.investment_project_id;
+
+        if (isGenericTask) {
+            if (!(normalizedDecision === 'approved' || normalizedDecision === 'rejected')) {
+                res.status(400).json({ error: 'decision must be approved or rejected for request and CEO contact tasks' });
+                return;
+            }
+
+            if (!(task.status === 'assigned' || task.status === 'manager_queue')) {
+                res.status(409).json({ error: 'Task must be assigned before review' });
+                return;
+            }
+
+            if (task.flow_type === 'ceo_contact' && userRole !== 'super_admin') {
+                res.status(403).json({ error: 'Only super admin can review CEO contact tasks' });
+                return;
+            }
+
+            if (task.flow_type === 'request' && !(userRole === 'department_manager' || userRole === 'super_admin')) {
+                res.status(403).json({ error: 'Only department managers or super admin can review request tasks' });
+                return;
+            }
+
+            if (userRole !== 'super_admin') {
+                const actorDepartment = normalizeDepartment(req.user?.department);
+                if (!actorDepartment) {
+                    res.status(403).json({ error: 'Department is required for this action' });
+                    return;
+                }
+
+                const belongsToActorDepartment = task.origin_department === actorDepartment || task.target_department === actorDepartment;
+                if (!belongsToActorDepartment && task.assigned_to !== userId) {
+                    res.status(403).json({ error: 'You are not allowed to review this task' });
+                    return;
+                }
+            }
+
+            const nextStatus = normalizedDecision as 'approved' | 'rejected';
+            const noteColumn = userRole === 'super_admin' ? 'super_admin_comment' : 'manager_note';
+            const updatedTask = await pool.query(`
+                UPDATE project_workflow_tasks
+                SET status = $1,
+                    ${noteColumn} = $2,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id = $3
+                RETURNING *
+            `, [nextStatus, comment || null, id]);
+
+            await recordWorkflowTransition({
+                entityType: 'workflow_task',
+                entityId: id,
+                oldState: oldTaskState,
+                newState: nextStatus,
+                changedBy: userId,
+                note: comment || `Task ${nextStatus}`,
+                metadata: {
+                    taskType: task.flow_type,
+                    actorRole: userRole,
+                },
+            });
+
+            void recordActivity({
+                actorId: userId,
+                action: normalizedDecision === 'approved' ? 'approve' : 'reject',
+                entityType: 'workflow_task',
+                entityId: id,
+                summary: `${normalizedDecision === 'approved' ? 'approved' : 'rejected'} ${task.flow_type.replace('_', ' ')} task`,
+                metadata: {
+                    taskType: task.flow_type,
+                    hasComment: Boolean(comment),
+                },
+                sourcePath: '/api/workflow-tasks/:id/review',
+                requestMethod: 'POST',
+            }).catch((err) => console.error('Activity log failed:', err));
+
+            res.status(200).json({
+                message: `Task ${nextStatus} successfully`,
+                data: updatedTask.rows[0],
+            });
+            return;
+        }
+
+        if (userRole !== 'super_admin') {
+            res.status(403).json({ error: 'Only super admin can review workflow tasks' });
+            return;
+        }
 
         if (normalizedDecision === 'contract' || normalizedDecision === 'document' || normalizedDecision === 'documents') {
             const normalizedBranch = normalizedDecision === 'contract' ? 'contract' : 'documents';
@@ -872,8 +968,8 @@ export const getWorkflowTaskHistory = async (req: AuthRequest, res: Response): P
         const taskResult = await pool.query(`
             SELECT
                 t.*,
-                p.project_name,
-                p.project_code,
+                COALESCE(p.project_name, t.title) AS project_name,
+                COALESCE(p.project_code, t.id::text) AS project_code,
                 p.review_status,
                 p.department_type,
                 p.workflow_path,
@@ -881,7 +977,7 @@ export const getWorkflowTaskHistory = async (req: AuthRequest, res: Response): P
                 aby.username AS assigned_by_username,
                 aup.username AS attachment_uploaded_by_username
             FROM project_workflow_tasks t
-            JOIN investment_projects p ON p.id = t.investment_project_id
+            LEFT JOIN investment_projects p ON p.id = t.investment_project_id
             LEFT JOIN users au ON au.id = t.assigned_to
             LEFT JOIN users aby ON aby.id = t.assigned_by
             LEFT JOIN users aup ON aup.id = t.attachment_uploaded_by

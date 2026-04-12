@@ -2,7 +2,7 @@ import pool from '../config/database';
 
 export type WorkflowAction = 'Approve' | 'Contract' | 'Documents' | 'Reject';
 export type WorkflowTaskStatus = 'manager_queue' | 'assigned' | 'employee_submitted' | 'manager_submitted' | 'under_super_admin_review' | 'approved' | 'rejected';
-export type WorkflowTaskFlowType = 'contract' | 'documents';
+export type WorkflowTaskFlowType = 'contract' | 'documents' | 'request' | 'ceo_contact';
 export type WorkflowAuditEntity = 'investment_project' | 'workflow_task';
 
 let workflowSchemaReady = false;
@@ -21,16 +21,17 @@ export const ensureWorkflowSchema = async (): Promise<void> => {
     await pool.query(`
         CREATE TABLE IF NOT EXISTS project_workflow_tasks (
             id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-            investment_project_id UUID NOT NULL REFERENCES investment_projects(id) ON DELETE CASCADE,
+            investment_project_id UUID REFERENCES investment_projects(id) ON DELETE CASCADE,
             title VARCHAR(255) NOT NULL,
             description TEXT,
-            flow_type VARCHAR(20) NOT NULL CHECK (flow_type IN ('contract', 'documents')),
+            flow_type VARCHAR(20) NOT NULL CHECK (flow_type IN ('contract', 'documents', 'request', 'ceo_contact')),
             status VARCHAR(40) NOT NULL DEFAULT 'manager_queue'
                 CHECK (status IN ('manager_queue', 'assigned', 'employee_submitted', 'manager_submitted', 'under_super_admin_review', 'approved', 'rejected')),
             origin_department VARCHAR(20) NOT NULL CHECK (origin_department IN ('investment', 'franchise', 'project', 'ceo')),
             target_department VARCHAR(20) NOT NULL CHECK (target_department IN ('investment', 'franchise', 'project', 'ceo')),
             assigned_to UUID REFERENCES users(id) ON DELETE SET NULL,
             assigned_by UUID REFERENCES users(id) ON DELETE SET NULL,
+            metadata JSONB DEFAULT '{}'::jsonb,
             manager_attachment_url TEXT,
             employee_attachment_url TEXT,
             attachment_url TEXT,
@@ -50,6 +51,27 @@ export const ensureWorkflowSchema = async (): Promise<void> => {
     await pool.query(`
         ALTER TABLE project_workflow_tasks
         ADD COLUMN IF NOT EXISTS assignee_note TEXT;
+    `);
+
+    await pool.query(`
+        ALTER TABLE project_workflow_tasks
+        ADD COLUMN IF NOT EXISTS metadata JSONB DEFAULT '{}'::jsonb;
+    `);
+
+    await pool.query(`
+        ALTER TABLE project_workflow_tasks
+        ALTER COLUMN investment_project_id DROP NOT NULL;
+    `);
+
+    await pool.query(`
+        ALTER TABLE project_workflow_tasks
+        DROP CONSTRAINT IF EXISTS project_workflow_tasks_flow_type_check;
+    `);
+
+    await pool.query(`
+        ALTER TABLE project_workflow_tasks
+        ADD CONSTRAINT project_workflow_tasks_flow_type_check
+        CHECK (flow_type IN ('contract', 'documents', 'request', 'ceo_contact'));
     `);
 
     await pool.query(`
@@ -107,6 +129,9 @@ export const ensureWorkflowSchema = async (): Promise<void> => {
         CREATE INDEX IF NOT EXISTS idx_workflow_tasks_status ON project_workflow_tasks(status);
     `);
     await pool.query(`
+        CREATE INDEX IF NOT EXISTS idx_workflow_tasks_flow_type ON project_workflow_tasks(flow_type);
+    `);
+    await pool.query(`
         CREATE INDEX IF NOT EXISTS idx_workflow_tasks_origin_dept ON project_workflow_tasks(origin_department);
     `);
     await pool.query(`
@@ -114,6 +139,9 @@ export const ensureWorkflowSchema = async (): Promise<void> => {
     `);
     await pool.query(`
         CREATE INDEX IF NOT EXISTS idx_workflow_tasks_assigned_to ON project_workflow_tasks(assigned_to);
+    `);
+    await pool.query(`
+        CREATE INDEX IF NOT EXISTS idx_workflow_tasks_created_by ON project_workflow_tasks(created_by);
     `);
 
     await pool.query(`
