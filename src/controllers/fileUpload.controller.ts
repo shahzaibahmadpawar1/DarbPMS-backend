@@ -3,6 +3,7 @@ import { AuthRequest } from '../types';
 import path from 'path';
 import { randomUUID } from 'crypto';
 import { ensureSupabaseBucketExists, getSupabaseAdmin, SUPABASE_BUCKET_NAME } from '../config/supabase';
+import { recordActivity } from '../utils/activity';
 
 const sanitizeBaseName = (name: string): string => {
     const extension = path.extname(name);
@@ -48,6 +49,24 @@ export const uploadWorkflowFile = async (req: AuthRequest, res: Response): Promi
             .getPublicUrl(objectPath);
 
         const fileUrl = data.publicUrl;
+
+        // Log activity
+        const userId = req.user?.id;
+        void recordActivity({
+            actorId: userId,
+            action: 'upload',
+            entityType: 'file',
+            entityId: `${objectPath}`,
+            summary: `uploaded file: ${file.originalname || 'document'}`,
+            metadata: {
+                originalName: file.originalname,
+                mimeType: file.mimetype,
+                fileSize: file.size,
+                storagePath: objectPath,
+            },
+            sourcePath: '/api/files/upload',
+            requestMethod: 'POST',
+        }).catch((err) => console.error('Activity log failed:', err));
 
         res.status(201).json({
             message: 'File uploaded successfully',

@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
 import pool from '../config/database';
+import { recordActivity } from '../utils/activity';
 import { isSchemaCompatibilityError } from '../utils/dbErrors';
 
 const licenseLifecycleReady: Record<string, boolean> = {};
@@ -71,6 +72,21 @@ export const createSalamahLicense = async (req: Request, res: Response): Promise
         `, [shouldSubmit, userId || null, result.rows[0].id]);
 
         const refreshed = await pool.query('SELECT * FROM salamah_licenses WHERE id = $1 LIMIT 1', [result.rows[0].id]);
+        
+        // Log activity
+        void recordActivity({
+            actorId: userId,
+            action: shouldSubmit ? 'submit' : 'save',
+            entityType: 'government_license',
+            entityId: result.rows[0].id,
+            summary: `${shouldSubmit ? 'submitted' : 'saved'} government license`,
+            metadata: {
+                licenseType: refreshed.rows[0]?.license_type,
+            },
+            sourcePath: '/api/government-licenses',
+            requestMethod: 'POST',
+        }).catch((err) => console.error('Activity log failed:', err));
+
         res.status(201).json({
             message: shouldSubmit ? 'Salamah License submitted successfully' : 'Salamah License saved successfully',
             data: refreshed.rows[0],

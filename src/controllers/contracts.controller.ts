@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
 import pool from '../config/database';
+import { recordActivity } from '../utils/activity';
 import { isSchemaCompatibilityError } from '../utils/dbErrors';
 
 let contractLifecycleReady = false;
@@ -80,6 +81,21 @@ export const createContract = async (req: Request, res: Response): Promise<void>
         `, [shouldSubmit, userId || null, result.rows[0].id]);
 
         const refreshed = await pool.query('SELECT * FROM contracts WHERE id = $1 LIMIT 1', [result.rows[0].id]);
+
+        // Log activity
+        void recordActivity({
+            actorId: userId,
+            action: shouldSubmit ? 'submit' : 'save',
+            entityType: 'contract',
+            entityId: result.rows[0].id,
+            summary: `${shouldSubmit ? 'submitted' : 'saved'} contract`,
+            metadata: {
+                contractType: refreshed.rows[0]?.contract_type,
+            },
+            sourcePath: '/api/contracts',
+            requestMethod: 'POST',
+        }).catch((err) => console.error('Activity log failed:', err));
+
         res.status(201).json({
             message: shouldSubmit ? 'Contract submitted successfully' : 'Contract saved successfully',
             data: refreshed.rows[0],

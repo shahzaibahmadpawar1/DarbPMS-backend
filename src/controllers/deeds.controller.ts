@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
 import pool from '../config/database';
+import { recordActivity } from '../utils/activity';
 
 let deedLifecycleReady = false;
 
@@ -71,6 +72,20 @@ export const createDeed = async (req: Request, res: Response): Promise<void> => 
         `, [shouldSubmit, userId || null, result.rows[0].id]);
 
         const refreshed = await pool.query('SELECT * FROM deeds WHERE id = $1 LIMIT 1', [result.rows[0].id]);
+
+        // Log activity
+        void recordActivity({
+            actorId: userId,
+            action: shouldSubmit ? 'submit' : 'save',
+            entityType: 'deed',
+            entityId: result.rows[0].id,
+            summary: `${shouldSubmit ? 'submitted' : 'saved'} deed document`,
+            metadata: {
+                deedType: result.rows[0].deed_type,
+            },
+            sourcePath: '/api/deeds',
+            requestMethod: 'POST',
+        }).catch((err) => console.error('Activity log failed:', err));
 
         res.status(201).json({
             message: shouldSubmit ? 'Deed information submitted successfully' : 'Deed information saved successfully',

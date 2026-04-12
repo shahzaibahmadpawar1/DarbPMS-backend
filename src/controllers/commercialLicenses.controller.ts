@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
 import pool from '../config/database';
+import { recordActivity } from '../utils/activity';
 
 let commercialLicenseLifecycleReady = false;
 
@@ -73,6 +74,20 @@ export const createCommercialLicense = async (req: Request, res: Response): Prom
         `, [shouldSubmit, userId || null, result.rows[0].id]);
 
         const refreshed = await pool.query('SELECT * FROM commercial_licenses WHERE id = $1 LIMIT 1', [result.rows[0].id]);
+
+        // Log activity
+        void recordActivity({
+            actorId: userId,
+            action: shouldSubmit ? 'submit' : 'save',
+            entityType: 'commercial_license',
+            entityId: result.rows[0].id,
+            summary: `${shouldSubmit ? 'submitted' : 'saved'} commercial license`,
+            metadata: {
+                licenseType: refreshed.rows[0]?.license_type,
+            },
+            sourcePath: '/api/commercial-licenses',
+            requestMethod: 'POST',
+        }).catch((err) => console.error('Activity log failed:', err));
 
         res.status(201).json({
             message: shouldSubmit ? 'Commercial License submitted successfully' : 'Commercial License saved successfully',

@@ -3,6 +3,7 @@ import pool from '../config/database';
 import { createInitialReviewTaskForProject } from './workflowTasks.controller';
 import { deriveAction, recordWorkflowTransition } from '../utils/workflow';
 import { isSchemaCompatibilityError } from '../utils/dbErrors';
+import { recordActivity } from '../utils/activity';
 
 let investmentLifecycleSchemaReady = false;
 
@@ -183,6 +184,22 @@ export const createInvestmentProject = async (req: Request, res: Response): Prom
             await createInitialReviewTaskForProject(result.rows[0].id, userId);
         }
 
+        // Log activity
+        void recordActivity({
+            actorId: userId,
+            action: shouldSubmit ? 'submit' : 'save',
+            entityType: 'investment_project',
+            entityId: result.rows[0].id,
+            summary: `${shouldSubmit ? 'submitted' : 'saved'} investment project: ${resolvedProjectCode}`,
+            metadata: {
+                projectName: resolvedProjectName,
+                projectCode: resolvedProjectCode,
+                departmentType: trimmedDepartmentType,
+            },
+            sourcePath: '/api/investment-projects',
+            requestMethod: 'POST',
+        }).catch((err) => console.error('Activity log failed:', err));
+
         res.status(201).json({
             message: shouldSubmit ? 'Investment project submitted successfully' : 'Investment project saved successfully',
             data: result.rows[0],
@@ -346,6 +363,21 @@ export const updateInvestmentProject = async (req: Request, res: Response): Prom
         if (shouldSubmit && userId) {
             await createInitialReviewTaskForProject(id, userId);
         }
+
+        // Log activity
+        void recordActivity({
+            actorId: userId,
+            action: shouldSubmit ? 'submit' : 'update',
+            entityType: 'investment_project',
+            entityId: id,
+            summary: `${shouldSubmit ? 'submitted' : 'updated'} investment project`,
+            metadata: {
+                updatedFields: fields.map(([k]) => k),
+                columnCount: fields.length,
+            },
+            sourcePath: `/api/investment-projects/${id}`,
+            requestMethod: 'PUT',
+        }).catch((err) => console.error('Activity log failed:', err));
 
         res.status(200).json({ message: 'Project updated', data: result.rows[0] });
     } catch (error: any) {

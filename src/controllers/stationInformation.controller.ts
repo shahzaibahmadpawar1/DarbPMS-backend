@@ -3,6 +3,7 @@ import pool from '../config/database';
 import { normalizeUserRole } from '../utils/roles';
 import { isSchemaCompatibilityError } from '../utils/dbErrors';
 import { UserModel } from '../models/user.model';
+import { recordActivity } from '../utils/activity';
 
 const ALLOWED_STATION_TYPES = ['operation', 'rent', 'franchise', 'investment', 'ownership'] as const;
 
@@ -84,6 +85,22 @@ export const createStationInformation = async (req: Request, res: Response): Pro
         ];
 
         const result = await pool.query(query, values);
+
+        // Log activity
+        void recordActivity({
+            actorId: userId,
+            action: 'create',
+            entityType: 'station',
+            entityId: result.rows[0].id,
+            summary: `created station: ${stationName} (${stationCode})`,
+            metadata: {
+                stationCode,
+                stationName,
+                stationType: normalizedStationTypeCode,
+            },
+            sourcePath: '/api/stations',
+            requestMethod: 'POST',
+        }).catch((err) => console.error('Activity log failed:', err));
 
         res.status(201).json({
             message: 'Station information created successfully',

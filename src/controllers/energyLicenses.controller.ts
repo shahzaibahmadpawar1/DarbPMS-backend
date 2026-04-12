@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
 import pool from '../config/database';
+import { recordActivity } from '../utils/activity';
 
 let energySchemaReady = false;
 
@@ -81,6 +82,21 @@ export const createEnergyLicense = async (req: Request, res: Response): Promise<
         `, [shouldSubmit, userId || null, result.rows[0].id]);
 
         const refreshed = await pool.query('SELECT * FROM energy_licenses WHERE id = $1 LIMIT 1', [result.rows[0].id]);
+        
+        // Log activity
+        void recordActivity({
+            actorId: userId,
+            action: shouldSubmit ? 'submit' : 'save',
+            entityType: 'energy_license',
+            entityId: result.rows[0].id,
+            summary: `${shouldSubmit ? 'submitted' : 'saved'} energy license`,
+            metadata: {
+                licenseType: refreshed.rows[0]?.license_type,
+            },
+            sourcePath: '/api/energy-licenses',
+            requestMethod: 'POST',
+        }).catch((err) => console.error('Activity log failed:', err));
+
         res.status(201).json({
             message: shouldSubmit ? 'Energy License submitted successfully' : 'Energy License saved successfully',
             data: refreshed.rows[0],

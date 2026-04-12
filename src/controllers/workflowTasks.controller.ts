@@ -3,6 +3,7 @@ import pool from '../config/database';
 import { AuthRequest } from '../types';
 import { ensureWorkflowSchema, WorkflowTaskFlowType, recordWorkflowTransition } from '../utils/workflow';
 import { isSchemaCompatibilityError } from '../utils/dbErrors';
+import { recordActivity } from '../utils/activity';
 
 const normalizeDepartment = (
     value: unknown,
@@ -336,6 +337,21 @@ export const assignWorkflowTask = async (req: AuthRequest, res: Response): Promi
             },
         });
 
+        // Log activity
+        void recordActivity({
+            actorId,
+            action: 'assign',
+            entityType: 'workflow_task',
+            entityId: id,
+            summary: 'assigned workflow task to employee',
+            metadata: {
+                assignedToUserId,
+                targetDepartment: resolvedTargetDepartment,
+            },
+            sourcePath: '/api/workflow-tasks/:id/assign',
+            requestMethod: 'POST',
+        }).catch((err) => console.error('Activity log failed:', err));
+
         res.status(200).json({ message: 'Task assigned successfully', data: result.rows[0] });
     } catch (error: any) {
         res.status(500).json({ error: 'Failed to assign task', details: error.message });
@@ -383,6 +399,21 @@ export const addManagerAttachment = async (req: AuthRequest, res: Response): Pro
             res.status(404).json({ error: 'Task not found' });
             return;
         }
+
+        // Log activity
+        void recordActivity({
+            actorId: userId,
+            action: 'upload',
+            entityType: 'workflow_task',
+            entityId: id,
+            summary: 'uploaded manager attachment',
+            metadata: {
+                hasNote: Boolean(note),
+                isUrl: true,
+            },
+            sourcePath: '/api/workflow-tasks/:id/manager-attachment',
+            requestMethod: 'POST',
+        }).catch((err) => console.error('Activity log failed:', err));
 
         res.status(200).json({ message: 'Manager attachment added', data: result.rows[0] });
     } catch (error: any) {
@@ -472,6 +503,22 @@ export const submitEmployeeAttachment = async (req: AuthRequest, res: Response):
                 branchWorkflow: Boolean(task.workflow_path),
             },
         });
+
+        // Log activity
+        void recordActivity({
+            actorId: userId,
+            action: 'submit',
+            entityType: 'workflow_task',
+            entityId: id,
+            summary: nextStatus === 'manager_submitted' ? 'submitted to manager' : 'submitted attachment',
+            metadata: {
+                newStatus: nextStatus,
+                hasNote: Boolean(note),
+                usedExistingAttachment: !normalizedAttachmentUrl,
+            },
+            sourcePath: '/api/workflow-tasks/:id/submit-attachment',
+            requestMethod: 'POST',
+        }).catch((err) => console.error('Activity log failed:', err));
 
         res.status(200).json({
             message: nextStatus === 'manager_submitted'
@@ -594,6 +641,21 @@ export const managerValidateWorkflowTask = async (req: AuthRequest, res: Respons
                 actorRole: userRole,
             },
         });
+
+        // Log activity
+        void recordActivity({
+            actorId: userId,
+            action: 'validate',
+            entityType: 'workflow_task',
+            entityId: id,
+            summary: 'validated task and moved to super admin review',
+            metadata: {
+                projectId: task.investment_project_id,
+                hasComment: Boolean(comment),
+            },
+            sourcePath: '/api/workflow-tasks/:id/validate',
+            requestMethod: 'POST',
+        }).catch((err) => console.error('Activity log failed:', err));
 
         res.status(200).json({
             message: 'Task validated and moved to super admin review',
@@ -764,6 +826,22 @@ export const reviewWorkflowTask = async (req: AuthRequest, res: Response): Promi
                 workflowTaskId: id,
             },
         });
+
+        // Log activity
+        void recordActivity({
+            actorId: userId,
+            action: normalizedDecision === 'approved' ? 'approve' : 'reject',
+            entityType: 'workflow_task',
+            entityId: id,
+            summary: `${normalizedDecision === 'approved' ? 'approved' : 'rejected'} task`,
+            metadata: {
+                projectId: task.investment_project_id,
+                decision: normalizedDecision,
+                hasComment: Boolean(comment),
+            },
+            sourcePath: '/api/workflow-tasks/:id/review',
+            requestMethod: 'POST',
+        }).catch((err) => console.error('Activity log failed:', err));
 
         if (normalizedDecision === 'approved') {
             await upsertStationFromProject(task.investment_project_id, userId);

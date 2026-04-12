@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
 import pool from '../config/database';
+import { recordActivity } from '../utils/activity';
 import { isSchemaCompatibilityError } from '../utils/dbErrors';
 
 let tankLifecycleReady = false;
@@ -58,6 +59,22 @@ export const createTank = async (req: Request, res: Response): Promise<void> => 
         `, [shouldSubmit, userId || null, result.rows[0].tank_code]);
 
         const refreshed = await pool.query('SELECT * FROM tanks WHERE tank_code = $1 LIMIT 1', [result.rows[0].tank_code]);
+
+        // Log activity
+        void recordActivity({
+            actorId: userId,
+            action: shouldSubmit ? 'submit' : 'save',
+            entityType: 'tank',
+            entityId: result.rows[0].tank_code,
+            summary: `${shouldSubmit ? 'submitted' : 'saved'} tank: ${result.rows[0].tank_code}`,
+            metadata: {
+                tankCode: result.rows[0].tank_code,
+                fuelType,
+                stationCode,
+            },
+            sourcePath: '/api/tanks',
+            requestMethod: 'POST',
+        }).catch((err) => console.error('Activity log failed:', err));
 
         res.status(201).json({
             message: shouldSubmit ? 'Tank submitted successfully' : 'Tank saved successfully',
@@ -160,6 +177,21 @@ export const updateTank = async (req: Request, res: Response): Promise<void> => 
             res.status(404).json({ error: 'Tank not found' });
             return;
         }
+
+        // Log activity
+        void recordActivity({
+            actorId: userId,
+            action: shouldSubmit ? 'submit' : 'update',
+            entityType: 'tank',
+            entityId: result.rows[0].tank_code,
+            summary: `${shouldSubmit ? 'submitted' : 'updated'} tank: ${tankCode}`,
+            metadata: {
+                tankCode,
+            },
+            sourcePath: `/api/tanks/${tankCode}`,
+            requestMethod: 'PUT',
+        }).catch((err) => console.error('Activity log failed:', err));
+
         res.status(200).json({ message: 'Tank updated successfully', data: result.rows[0] });
     } catch (error) {
         console.error('Error updating tank:', error);

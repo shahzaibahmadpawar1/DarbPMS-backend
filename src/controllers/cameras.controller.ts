@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
 import pool from '../config/database';
+import { recordActivity } from '../utils/activity';
 
 let cameraLifecycleReady = false;
 
@@ -64,6 +65,22 @@ export const createCamera = async (req: Request, res: Response): Promise<void> =
             userId,
         ];
         const result = await pool.query(query, values);
+
+        // Log activity
+        void recordActivity({
+            actorId: userId,
+            action: shouldSubmit ? 'submit' : 'save',
+            entityType: 'camera',
+            entityId: result.rows[0].id,
+            summary: `${shouldSubmit ? 'submitted' : 'saved'} camera: ${resolvedSerialNumber}`,
+            metadata: {
+                serialNumber: resolvedSerialNumber,
+                cameraType,
+                stationCode,
+            },
+            sourcePath: '/api/cameras',
+            requestMethod: 'POST',
+        }).catch((err) => console.error('Activity log failed:', err));
 
         res.status(201).json({
             message: shouldSubmit ? 'Camera submitted successfully' : 'Camera saved successfully',
@@ -162,6 +179,20 @@ export const updateCamera = async (req: Request, res: Response): Promise<void> =
             res.status(404).json({ error: 'Camera not found' });
             return;
         }
+
+        // Log activity
+        void recordActivity({
+            actorId: userId,
+            action: shouldSubmit ? 'submit' : 'update',
+            entityType: 'camera',
+            entityId: result.rows[0].id,
+            summary: `${shouldSubmit ? 'submitted' : 'updated'} camera: ${serialNumber}`,
+            metadata: {
+                serialNumber,
+            },
+            sourcePath: `/api/cameras/${serialNumber}`,
+            requestMethod: 'PUT',
+        }).catch((err) => console.error('Activity log failed:', err));
 
         res.status(200).json({ message: 'Camera updated successfully', data: result.rows[0] });
     } catch (error) {

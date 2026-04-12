@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
 import pool from '../config/database';
+import { recordActivity } from '../utils/activity';
 
 let nozzleLifecycleReady = false;
 
@@ -57,6 +58,21 @@ export const createNozzle = async (req: Request, res: Response): Promise<void> =
         `, [shouldSubmit, userId || null, result.rows[0].nozzle_serial_number]);
 
         const refreshed = await pool.query('SELECT * FROM nozzles WHERE nozzle_serial_number = $1 LIMIT 1', [result.rows[0].nozzle_serial_number]);
+
+        // Log activity
+        void recordActivity({
+            actorId: userId,
+            action: shouldSubmit ? 'submit' : 'save',
+            entityType: 'nozzle',
+            entityId: result.rows[0].nozzle_serial_number,
+            summary: `${shouldSubmit ? 'submitted' : 'saved'} nozzle: ${result.rows[0].nozzle_serial_number}`,
+            metadata: {
+                serialNumber: result.rows[0].nozzle_serial_number,
+                fuelType,
+            },
+            sourcePath: '/api/nozzles',
+            requestMethod: 'POST',
+        }).catch((err) => console.error('Activity log failed:', err));
 
         res.status(201).json({
             message: shouldSubmit ? 'Nozzle submitted successfully' : 'Nozzle saved successfully',
@@ -151,6 +167,21 @@ export const updateNozzle = async (req: Request, res: Response): Promise<void> =
             res.status(404).json({ error: 'Nozzle not found' });
             return;
         }
+
+        // Log activity
+        void recordActivity({
+            actorId: userId,
+            action: shouldSubmit ? 'submit' : 'update',
+            entityType: 'nozzle',
+            entityId: result.rows[0].nozzle_serial_number,
+            summary: `${shouldSubmit ? 'submitted' : 'updated'} nozzle: ${serialNumber}`,
+            metadata: {
+                serialNumber,
+            },
+            sourcePath: `/api/nozzles/${serialNumber}`,
+            requestMethod: 'PUT',
+        }).catch((err) => console.error('Activity log failed:', err));
+
         res.status(200).json({ message: 'Nozzle updated successfully', data: result.rows[0] });
     } catch (error) {
         console.error('Error updating nozzle:', error);

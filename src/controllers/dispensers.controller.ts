@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
 import pool from '../config/database';
+import { recordActivity } from '../utils/activity';
 import { isSchemaCompatibilityError } from '../utils/dbErrors';
 
 let dispenserLifecycleReady = false;
@@ -65,6 +66,21 @@ export const createDispenser = async (req: Request, res: Response): Promise<void
             userId,
         ];
         const result = await pool.query(query, values);
+
+        // Log activity
+        void recordActivity({
+            actorId: userId,
+            action: shouldSubmit ? 'submit' : 'save',
+            entityType: 'dispenser',
+            entityId: result.rows[0].id,
+            summary: `${shouldSubmit ? 'submitted' : 'saved'} dispenser: ${dispenserName || result.rows[0].dispenser_serial_number}`,
+            metadata: {
+                serialNumber: result.rows[0].dispenser_serial_number,
+                stationCode,
+            },
+            sourcePath: '/api/dispensers',
+            requestMethod: 'POST',
+        }).catch((err) => console.error('Activity log failed:', err));
 
         res.status(201).json({
             message: shouldSubmit ? 'Dispenser submitted successfully' : 'Dispenser saved successfully',
@@ -166,6 +182,21 @@ export const updateDispenser = async (req: Request, res: Response): Promise<void
             res.status(404).json({ error: 'Dispenser not found' });
             return;
         }
+
+        // Log activity
+        void recordActivity({
+            actorId: userId,
+            action: shouldSubmit ? 'submit' : 'update',
+            entityType: 'dispenser',
+            entityId: result.rows[0].id,
+            summary: `${shouldSubmit ? 'submitted' : 'updated'} dispenser: ${serialNumber}`,
+            metadata: {
+                serialNumber,
+            },
+            sourcePath: `/api/dispensers/${serialNumber}`,
+            requestMethod: 'PUT',
+        }).catch((err) => console.error('Activity log failed:', err));
+
         res.status(200).json({ message: 'Dispenser updated successfully', data: result.rows[0] });
     } catch (error) {
         console.error('Error updating dispenser:', error);

@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
 import pool from '../config/database';
+import { recordActivity } from '../utils/activity';
 
 type CommercialComponentInput = {
     building?: string;
@@ -118,6 +119,21 @@ export const createArea = async (req: Request, res: Response): Promise<void> => 
         const refreshed = await client.query('SELECT * FROM station_areas WHERE id = $1 LIMIT 1', [areaId]);
 
         await client.query('COMMIT');
+
+        // Log activity
+        void recordActivity({
+            actorId: userId,
+            action: shouldSubmit ? 'submit' : 'save',
+            entityType: 'area',
+            entityId: areaId,
+            summary: `${shouldSubmit ? 'submitted' : 'saved'} station area`,
+            metadata: {
+                stationCode: refreshed.rows[0]?.station_code,
+            },
+            sourcePath: '/api/station-areas',
+            requestMethod: 'POST',
+        }).catch((err) => console.error('Activity log failed:', err));
+
         res.status(201).json({
             message: shouldSubmit ? 'Area information submitted successfully' : 'Area information saved successfully',
             data: refreshed.rows[0],

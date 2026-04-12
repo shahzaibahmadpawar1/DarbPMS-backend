@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
 import pool from '../config/database';
+import { recordActivity } from '../utils/activity';
 import { isSchemaCompatibilityError } from '../utils/dbErrors';
 
 let buildingPermitLifecycleReady = false;
@@ -83,6 +84,20 @@ export const createBuildingPermit = async (req: Request, res: Response): Promise
         `, [shouldSubmit, userId || null, result.rows[0].id]);
 
         const refreshed = await pool.query('SELECT * FROM building_permits WHERE id = $1 LIMIT 1', [result.rows[0].id]);
+
+        // Log activity
+        void recordActivity({
+            actorId: userId,
+            action: shouldSubmit ? 'submit' : 'save',
+            entityType: 'building_permit',
+            entityId: result.rows[0].id,
+            summary: `${shouldSubmit ? 'submitted' : 'saved'} building permit`,
+            metadata: {
+                permitType: refreshed.rows[0]?.permit_type,
+            },
+            sourcePath: '/api/building-permits',
+            requestMethod: 'POST',
+        }).catch((err) => console.error('Activity log failed:', err));
 
         res.status(201).json({
             message: shouldSubmit ? 'Building permit submitted successfully' : 'Building permit saved successfully',

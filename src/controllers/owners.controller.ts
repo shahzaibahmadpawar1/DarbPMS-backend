@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
 import pool from '../config/database';
+import { recordActivity } from '../utils/activity';
 import { isSchemaCompatibilityError } from '../utils/dbErrors';
 
 const ALLOWED_STATION_TYPES = ['operation', 'rent', 'franchise', 'investment', 'ownership'] as const;
@@ -91,6 +92,21 @@ export const createOwner = async (req: Request, res: Response): Promise<void> =>
         `;
 
         const result = await pool.query(insertQuery, values);
+
+        // Log activity
+        void recordActivity({
+            actorId: userId,
+            action: 'create',
+            entityType: 'owner',
+            entityId: result.rows[0].id,
+            summary: `created owner: ${ownerName || result.rows[0].id_no}`,
+            metadata: {
+                ownerName,
+                ownerType: result.rows[0].owner_type,
+            },
+            sourcePath: '/api/owners',
+            requestMethod: 'POST',
+        }).catch((err) => console.error('Activity log failed:', err));
 
         res.status(201).json({ message: 'Owner information created successfully', data: result.rows[0] });
     } catch (error: any) {
