@@ -102,24 +102,22 @@ const upsertStationFromProject = async (projectId: string, userId: string): Prom
 };
 
 export const getWorkflowTasks = async (req: AuthRequest, res: Response): Promise<void> => {
-    try {
-        await ensureWorkflowSchema();
+    const userId = req.user?.id;
+    const userRole = req.user?.role;
+    const userDepartment = req.user?.department;
 
-        const userId = req.user?.id;
-        const userRole = req.user?.role;
-        const userDepartment = req.user?.department;
+    if (!userId || !userRole) {
+        res.status(401).json({ error: 'Unauthorized' });
+        return;
+    }
 
-        if (!userId || !userRole) {
-            res.status(401).json({ error: 'Unauthorized' });
-            return;
-        }
+    const parsedLimit = Number.parseInt(String(req.query?.limit || ''), 10);
+    const parsedOffset = Number.parseInt(String(req.query?.offset || ''), 10);
+    const usePagination = Number.isFinite(parsedLimit) && parsedLimit > 0;
+    const safeLimit = usePagination ? Math.min(parsedLimit, 500) : null;
+    const safeOffset = Number.isFinite(parsedOffset) && parsedOffset >= 0 ? parsedOffset : 0;
 
-        const parsedLimit = Number.parseInt(String(req.query?.limit || ''), 10);
-        const parsedOffset = Number.parseInt(String(req.query?.offset || ''), 10);
-        const usePagination = Number.isFinite(parsedLimit) && parsedLimit > 0;
-        const safeLimit = usePagination ? Math.min(parsedLimit, 500) : null;
-        const safeOffset = Number.isFinite(parsedOffset) && parsedOffset >= 0 ? parsedOffset : 0;
-
+    const executeTaskQuery = async (): Promise<any[]> => {
         let query = `
             SELECT
                 t.*,
@@ -145,8 +143,7 @@ export const getWorkflowTasks = async (req: AuthRequest, res: Response): Promise
         if (userRole !== 'super_admin') {
             const department = normalizeDepartment(userDepartment);
             if (!department && userRole === 'department_manager') {
-                res.status(403).json({ error: 'Department is required for this action' });
-                return;
+                throw new Error('Department is required for this action');
             }
 
             if (userRole === 'department_manager') {
@@ -181,12 +178,31 @@ export const getWorkflowTasks = async (req: AuthRequest, res: Response): Promise
         }
 
         const result = await pool.query(query, params);
-        res.status(200).json({ data: result.rows });
+        return result.rows;
+    };
+
+    try {
+        await ensureWorkflowSchema();
+        const rows = await executeTaskQuery();
+        res.status(200).json({ data: rows });
     } catch (error: any) {
-        if (isSchemaCompatibilityError(error)) {
-            res.status(200).json({ data: [] });
+        if (error?.message === 'Department is required for this action') {
+            res.status(403).json({ error: error.message });
             return;
         }
+
+        if (isSchemaCompatibilityError(error)) {
+            try {
+                await ensureWorkflowSchema();
+                const rows = await executeTaskQuery();
+                res.status(200).json({ data: rows });
+                return;
+            } catch (retryError: any) {
+                res.status(500).json({ error: 'Failed to fetch workflow tasks', details: retryError.message });
+                return;
+            }
+        }
+
         res.status(500).json({ error: 'Failed to fetch workflow tasks', details: error.message });
     }
 };
