@@ -80,6 +80,12 @@ export const getWorkflowTasks = async (req: AuthRequest, res: Response): Promise
             return;
         }
 
+        const parsedLimit = Number.parseInt(String(req.query?.limit || ''), 10);
+        const parsedOffset = Number.parseInt(String(req.query?.offset || ''), 10);
+        const usePagination = Number.isFinite(parsedLimit) && parsedLimit > 0;
+        const safeLimit = usePagination ? Math.min(parsedLimit, 500) : null;
+        const safeOffset = Number.isFinite(parsedOffset) && parsedOffset >= 0 ? parsedOffset : 0;
+
         let query = `
             SELECT
                 t.*,
@@ -120,6 +126,11 @@ export const getWorkflowTasks = async (req: AuthRequest, res: Response): Promise
         }
 
         query += ' ORDER BY t.created_at DESC';
+
+        if (usePagination && safeLimit !== null) {
+            params.push(safeLimit, safeOffset);
+            query += ` LIMIT $${params.length - 1} OFFSET $${params.length}`;
+        }
 
         const result = await pool.query(query, params);
         res.status(200).json({ data: result.rows });

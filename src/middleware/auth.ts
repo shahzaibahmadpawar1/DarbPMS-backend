@@ -65,8 +65,19 @@ const hydrateUserFromDb = async (req: AuthRequest): Promise<boolean> => {
         return false;
     }
 
+    const cachedHydrated = (req as any)._hydratedUserLoaded;
+    if (cachedHydrated === true) {
+        return true;
+    }
+
+    const cachedMissing = (req as any)._hydratedUserMissing;
+    if (cachedMissing === true) {
+        return false;
+    }
+
     const user = await UserModel.findById(req.user.id);
     if (!user) {
+        (req as any)._hydratedUserMissing = true;
         return false;
     }
 
@@ -78,6 +89,8 @@ const hydrateUserFromDb = async (req: AuthRequest): Promise<boolean> => {
         user_type: user.user_type,
         status: user.status,
     };
+
+    (req as any)._hydratedUserLoaded = true;
 
     return true;
 };

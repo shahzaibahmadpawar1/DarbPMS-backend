@@ -115,6 +115,14 @@ export const getAllStationInformation = async (req: Request, res: Response): Pro
         const statusFilter = req.query?.status;
         const typeFilter = req.query?.type;
         const cityFilter = req.query?.city;
+        const limitFilter = req.query?.limit;
+        const offsetFilter = req.query?.offset;
+
+        const parsedLimit = Number.parseInt(String(limitFilter || ''), 10);
+        const parsedOffset = Number.parseInt(String(offsetFilter || ''), 10);
+        const usePagination = Number.isFinite(parsedLimit) && parsedLimit > 0;
+        const safeLimit = usePagination ? Math.min(parsedLimit, 500) : null;
+        const safeOffset = Number.isFinite(parsedOffset) && parsedOffset >= 0 ? parsedOffset : 0;
 
         const conditions: string[] = [];
         const params: unknown[] = [];
@@ -157,11 +165,16 @@ export const getAllStationInformation = async (req: Request, res: Response): Pro
             conditions.push(`city ILIKE $${params.length}`);
         }
 
-        const query = `
+        let query = `
             SELECT * FROM station_information
             ${conditions.length ? `WHERE ${conditions.join(' AND ')}` : ''}
             ORDER BY created_at DESC
         `;
+
+        if (usePagination && safeLimit !== null) {
+            params.push(safeLimit, safeOffset);
+            query += ` LIMIT $${params.length - 1} OFFSET $${params.length}`;
+        }
 
         const result = await pool.query(query, params);
 

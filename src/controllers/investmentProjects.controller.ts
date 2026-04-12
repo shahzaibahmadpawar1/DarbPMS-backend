@@ -142,15 +142,31 @@ export const getAllInvestmentProjects = async (req: Request, res: Response): Pro
     try {
         const userRole = (req as any).user?.role;
         const userDepartment = (req as any).user?.department;
-        const { departmentType } = req.query;
+        const { departmentType, limit, offset } = req.query as {
+            departmentType?: string;
+            limit?: string;
+            offset?: string;
+        };
         const effectiveDepartmentType = userRole === 'super_admin'
             ? departmentType
             : userDepartment;
 
-        const query = effectiveDepartmentType
+        const parsedLimit = Number.parseInt(String(limit || ''), 10);
+        const parsedOffset = Number.parseInt(String(offset || ''), 10);
+        const usePagination = Number.isFinite(parsedLimit) && parsedLimit > 0;
+        const safeLimit = usePagination ? Math.min(parsedLimit, 500) : null;
+        const safeOffset = Number.isFinite(parsedOffset) && parsedOffset >= 0 ? parsedOffset : 0;
+
+        let query = effectiveDepartmentType
             ? 'SELECT * FROM investment_projects WHERE department_type = $1 ORDER BY created_at DESC'
             : 'SELECT * FROM investment_projects ORDER BY created_at DESC';
-        const params = effectiveDepartmentType ? [effectiveDepartmentType] : [];
+        const params: unknown[] = effectiveDepartmentType ? [effectiveDepartmentType] : [];
+
+        if (usePagination && safeLimit !== null) {
+            params.push(safeLimit, safeOffset);
+            query += ` LIMIT $${params.length - 1} OFFSET $${params.length}`;
+        }
+
         const result = await pool.query(query, params);
         res.status(200).json({ message: 'Projects retrieved', data: result.rows, count: result.rows.length });
     } catch (error: any) {
@@ -168,15 +184,31 @@ export const getInvestmentProjectsByStation = async (req: Request, res: Response
         const userRole = (req as any).user?.role;
         const userDepartment = (req as any).user?.department;
         const { stationCode } = req.params;
-        const { departmentType } = req.query;
+        const { departmentType, limit, offset } = req.query as {
+            departmentType?: string;
+            limit?: string;
+            offset?: string;
+        };
         const effectiveDepartmentType = userRole === 'super_admin'
             ? departmentType
             : userDepartment;
 
-        const query = effectiveDepartmentType
+        const parsedLimit = Number.parseInt(String(limit || ''), 10);
+        const parsedOffset = Number.parseInt(String(offset || ''), 10);
+        const usePagination = Number.isFinite(parsedLimit) && parsedLimit > 0;
+        const safeLimit = usePagination ? Math.min(parsedLimit, 500) : null;
+        const safeOffset = Number.isFinite(parsedOffset) && parsedOffset >= 0 ? parsedOffset : 0;
+
+        let query = effectiveDepartmentType
             ? 'SELECT * FROM investment_projects WHERE station_code = $1 AND department_type = $2 ORDER BY created_at DESC'
             : 'SELECT * FROM investment_projects WHERE station_code = $1 ORDER BY created_at DESC';
-        const params = effectiveDepartmentType ? [stationCode, effectiveDepartmentType] : [stationCode];
+        const params: unknown[] = effectiveDepartmentType ? [stationCode, effectiveDepartmentType] : [stationCode];
+
+        if (usePagination && safeLimit !== null) {
+            params.push(safeLimit, safeOffset);
+            query += ` LIMIT $${params.length - 1} OFFSET $${params.length}`;
+        }
+
         const result = await pool.query(query, params);
         res.status(200).json({ message: 'Projects retrieved', data: result.rows, count: result.rows.length });
     } catch (error: any) {
