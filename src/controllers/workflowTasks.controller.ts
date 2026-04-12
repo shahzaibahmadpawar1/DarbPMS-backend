@@ -151,10 +151,19 @@ export const getWorkflowTasks = async (req: AuthRequest, res: Response): Promise
 
             if (userRole === 'department_manager') {
                 query += `
-                    WHERE t.origin_department = $1
-                       OR t.target_department = $1
-                       OR t.assigned_to = $2
-                       OR t.created_by = $2
+                    WHERE (
+                        t.flow_type IN ('request', 'ceo_contact')
+                        AND (t.assigned_to = $2 OR t.created_by = $2)
+                    )
+                    OR (
+                        (t.flow_type NOT IN ('request', 'ceo_contact') OR t.flow_type IS NULL)
+                        AND (
+                            t.origin_department = $1
+                            OR t.target_department = $1
+                            OR t.assigned_to = $2
+                            OR t.created_by = $2
+                        )
+                    )
                 `;
                 params.push(department, userId);
             } else {
