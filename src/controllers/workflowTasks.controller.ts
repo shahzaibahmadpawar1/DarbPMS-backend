@@ -4,12 +4,45 @@ import { AuthRequest } from '../types';
 import { ensureWorkflowSchema, WorkflowTaskFlowType, recordWorkflowTransition } from '../utils/workflow';
 import { isSchemaCompatibilityError } from '../utils/dbErrors';
 
-const normalizeDepartment = (value: unknown): 'investment' | 'franchise' | 'project' | 'ceo' | null => {
+const normalizeDepartment = (
+    value: unknown,
+):
+    | 'investment'
+    | 'franchise'
+    | 'it'
+    | 'project'
+    | 'finance'
+    | 'operation'
+    | 'maintanance'
+    | 'hr'
+    | 'realestate'
+    | 'procurement'
+    | 'quality'
+    | 'marketing'
+    | 'property_management'
+    | 'legal'
+    | 'government_relations'
+    | 'safety'
+    | 'ceo'
+    | null => {
     const normalized = String(value || '').trim().toLowerCase();
     if (!normalized) return null;
     if (normalized === 'investment') return 'investment';
     if (normalized === 'franchise' || normalized === 'frenchise') return 'franchise';
+    if (normalized === 'it') return 'it';
     if (normalized === 'project') return 'project';
+    if (normalized === 'finance') return 'finance';
+    if (normalized === 'operation' || normalized === 'operations') return 'operation';
+    if (normalized === 'maintanance' || normalized === 'maintenance') return 'maintanance';
+    if (normalized === 'hr') return 'hr';
+    if (normalized === 'realestate' || normalized === 'real_estate') return 'realestate';
+    if (normalized === 'procurement') return 'procurement';
+    if (normalized === 'quality') return 'quality';
+    if (normalized === 'marketing') return 'marketing';
+    if (normalized === 'property_management' || normalized === 'property management') return 'property_management';
+    if (normalized === 'legal') return 'legal';
+    if (normalized === 'government_relations' || normalized === 'government relations') return 'government_relations';
+    if (normalized === 'safety') return 'safety';
     if (normalized === 'ceo') return 'ceo';
     return null;
 };
@@ -146,11 +179,15 @@ export const getWorkflowTasks = async (req: AuthRequest, res: Response): Promise
 export const getAssignableUsers = async (req: AuthRequest, res: Response): Promise<void> => {
     try {
         const userRole = req.user?.role;
-        const userDepartment = req.user?.department;
         const targetDepartment = normalizeDepartment(req.query?.targetDepartment);
 
         if (!userRole) {
             res.status(401).json({ error: 'Unauthorized' });
+            return;
+        }
+
+        if (!(userRole === 'department_manager' || userRole === 'super_admin' || userRole === 'supervisor')) {
+            res.status(403).json({ error: 'Only department managers, supervisors, or super admin can view assignable users' });
             return;
         }
 
@@ -161,16 +198,7 @@ export const getAssignableUsers = async (req: AuthRequest, res: Response): Promi
         `;
         const params: unknown[] = [];
 
-        if (userRole !== 'super_admin') {
-            const department = normalizeDepartment(userDepartment);
-            if (!department) {
-                res.status(403).json({ error: 'Department is required for this action' });
-                return;
-            }
-
-            query += ' AND department = $1';
-            params.push(department);
-        } else if (targetDepartment) {
+        if (targetDepartment) {
             query += ' AND department = $1';
             params.push(targetDepartment);
         }
