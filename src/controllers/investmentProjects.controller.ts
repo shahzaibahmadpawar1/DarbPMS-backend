@@ -78,6 +78,44 @@ const normalizeStationType = (value: unknown): 'investment' | 'franchise' | 'ope
     return 'investment';
 };
 
+const DEFAULT_COMMERCIAL_ELEMENT_NAMES = ['Super Market', 'Fuel Station', 'Kiosks', 'Retail Shop', 'Drive Through'];
+const ELEMENT_UPDATE_KEYS = new Set([
+    'commercialElements',
+    'superMarket',
+    'fuelStation',
+    'kiosks',
+    'retailShop',
+    'driveThrough',
+    'superMarketArea',
+    'fuelStationArea',
+    'kiosksArea',
+    'retailShopArea',
+    'driveThroughArea',
+    'super_market',
+    'fuel_station',
+    'retail_shop',
+    'drive_through',
+    'super_market_area',
+    'fuel_station_area',
+    'kiosks_area',
+    'retail_shop_area',
+    'drive_through_area',
+]);
+
+const normalizeElementName = (value: unknown): string => String(value || '').trim().toLowerCase().replace(/[^a-z0-9]/g, '');
+
+const getMissingDefaultElements = (commercialElements: unknown): string[] => {
+    if (!Array.isArray(commercialElements)) {
+        return [...DEFAULT_COMMERCIAL_ELEMENT_NAMES];
+    }
+
+    const provided = new Set(
+        commercialElements.map((el: any) => normalizeElementName(el?.name)).filter(Boolean)
+    );
+
+    return DEFAULT_COMMERCIAL_ELEMENT_NAMES.filter((name) => !provided.has(normalizeElementName(name)));
+};
+
 const upsertStationFromProject = async (project: any, userId: string): Promise<void> => {
     const stationCode = String(project.project_code || '').trim();
     const stationName = String(project.project_name || '').trim();
@@ -117,6 +155,7 @@ const upsertStationFromProject = async (project: any, userId: string): Promise<v
 export const createInvestmentProject = async (req: Request, res: Response): Promise<void> => {
     try {
         await ensureInvestmentLifecycleSchema();
+        const userRole = (req as any).user?.role;
 
         const {
             departmentType, requestType, projectName, projectCode, city, district, area,
@@ -142,6 +181,16 @@ export const createInvestmentProject = async (req: Request, res: Response): Prom
         if (!trimmedDepartmentType || (shouldSubmit && (!resolvedProjectName || !resolvedProjectCode))) {
             res.status(400).json({ error: 'Department type is required. Submit also requires project name and project code.' });
             return;
+        }
+
+        if (userRole !== 'super_admin') {
+            const missingDefaults = getMissingDefaultElements(req.body?.commercialElements);
+            if (missingDefaults.length > 0) {
+                res.status(400).json({
+                    error: `Default station elements are required for non-super-admin users: ${missingDefaults.join(', ')}`,
+                });
+                return;
+            }
         }
 
         const normalizedContractType = normalizeContractType(contractType);
@@ -317,6 +366,7 @@ export const updateInvestmentProject = async (req: Request, res: Response): Prom
 
         const { id } = req.params;
         const userId = (req as any).user?.id;
+        const userRole = (req as any).user?.role;
         const fieldMap: Record<string, string> = {
             departmentType: 'department_type', requestType: 'request_type',
             projectName: 'project_name', projectCode: 'project_code',
@@ -348,6 +398,17 @@ export const updateInvestmentProject = async (req: Request, res: Response): Prom
         const fields = Object.entries(req.body)
             .filter(([k, v]) => k !== 'submit' && v !== undefined);
         if (!fields.length) { res.status(400).json({ error: 'No fields to update' }); return; }
+
+        const touchesElements = Object.keys(req.body || {}).some((key) => ELEMENT_UPDATE_KEYS.has(key));
+        if (touchesElements && userRole !== 'super_admin') {
+            const missingDefaults = getMissingDefaultElements(req.body?.commercialElements);
+            if (missingDefaults.length > 0) {
+                res.status(400).json({
+                    error: `Default station elements are required for non-super-admin users: ${missingDefaults.join(', ')}`,
+                });
+                return;
+            }
+        }
 
         const normalizedFields = fields.map(([key, value]) => {
             if (key === 'contractType' || key === 'contract_type') {
