@@ -74,6 +74,50 @@ const normalizeDepartment = (value: unknown): 'investment' | 'franchise' | null 
     return null;
 };
 
+const DASHBOARD_STATION_TYPES = ['operation', 'rent', 'franchise', 'investment', 'ownership'] as const;
+type DashboardStationType = (typeof DASHBOARD_STATION_TYPES)[number];
+
+const normalizeDashboardStationType = (value: unknown): DashboardStationType | null => {
+    if (value === null || value === undefined || value === '') {
+        return null;
+    }
+
+    const normalized = String(value).trim().toLowerCase();
+    const aliases: Record<string, DashboardStationType> = {
+        operational: 'operation',
+        operation: 'operation',
+        '3': 'operation',
+        rental: 'rent',
+        rented: 'rent',
+        lease: 'rent',
+        rent: 'rent',
+        '2': 'rent',
+        frenchise: 'franchise',
+        franchise: 'franchise',
+        '4': 'franchise',
+        investment: 'investment',
+        invest: 'investment',
+        '5': 'investment',
+        ownership: 'ownership',
+        owner: 'ownership',
+        owned: 'ownership',
+        '1': 'ownership',
+    };
+
+    return aliases[normalized] || null;
+};
+
+const normalizedStationTypeSql = (columnName: string) => `
+    CASE
+        WHEN lower(COALESCE(${columnName}, '')) IN ('frenchise', 'franchise', '4') THEN 'franchise'
+        WHEN lower(COALESCE(${columnName}, '')) IN ('operational', 'operation', '3') THEN 'operation'
+        WHEN lower(COALESCE(${columnName}, '')) IN ('rental', 'rented', 'lease', 'rent', '2') THEN 'rent'
+        WHEN lower(COALESCE(${columnName}, '')) IN ('investment', 'invest', '5') THEN 'investment'
+        WHEN lower(COALESCE(${columnName}, '')) IN ('ownership', 'owner', 'owned', '1') THEN 'ownership'
+        ELSE lower(COALESCE(${columnName}, ''))
+    END
+`;
+
 const normalizeDashboardBucket = (
     value: unknown,
 ):
@@ -109,16 +153,27 @@ const normalizeDashboardBucket = (
     return 'total-projects';
 };
 
-const buildWorkflowScopeQuery = (departmentType: string | null) => {
-    const filter = departmentType ? 'WHERE department_type = $1' : '';
-    const params = departmentType ? [departmentType] : [];
+const buildWorkflowScopeQuery = (departmentType: string | null, stationType: DashboardStationType | null) => {
+    const params: unknown[] = [];
+    const whereClauses: string[] = ['1 = 1'];
+
+    if (departmentType) {
+        params.push(departmentType);
+        whereClauses.push(`p.department_type = $${params.length}`);
+    }
+
+    if (stationType) {
+        params.push(stationType);
+        whereClauses.push(`${normalizedStationTypeSql('s.station_type_code')} = $${params.length}`);
+    }
 
     return {
         text: `
             WITH scoped_projects AS (
-                SELECT id, review_status, department_type
-                FROM investment_projects
-                ${filter}
+                SELECT p.id, p.review_status, p.department_type
+                FROM investment_projects p
+                LEFT JOIN station_information s ON s.station_code = COALESCE(NULLIF(p.station_code, ''), p.project_code)
+                WHERE ${whereClauses.join(' AND ')}
             ),
             contract_projects AS (
                 SELECT DISTINCT t.investment_project_id AS project_id
@@ -148,7 +203,11 @@ const buildWorkflowScopeQuery = (departmentType: string | null) => {
     };
 };
 
-const buildDashboardStationQuery = (bucket: ReturnType<typeof normalizeDashboardBucket>, departmentType: string | null) => {
+const buildDashboardStationQuery = (
+    bucket: ReturnType<typeof normalizeDashboardBucket>,
+    departmentType: string | null,
+    stationType: DashboardStationType | null,
+) => {
     const stationBuckets = new Set<ReturnType<typeof normalizeDashboardBucket>>([
         'total-stations',
         'under-execution',
@@ -165,6 +224,11 @@ const buildDashboardStationQuery = (bucket: ReturnType<typeof normalizeDashboard
         if (departmentType) {
             params.push(departmentType);
             whereClauses.push(`(CASE WHEN lower(station_type_code) = 'frenchise' THEN 'franchise' ELSE lower(station_type_code) END) = $${params.length}`);
+        }
+
+        if (stationType) {
+            params.push(stationType);
+            whereClauses.push(`${normalizedStationTypeSql('station_type_code')} = $${params.length}`);
         }
 
         if (bucket === 'under-execution') {
@@ -205,8 +269,18 @@ const buildDashboardStationQuery = (bucket: ReturnType<typeof normalizeDashboard
         };
     }
 
-    const filterClause = departmentType ? 'WHERE 1 = 1 AND p.department_type = $1' : 'WHERE 1 = 1';
-    const params = departmentType ? [departmentType] : [];
+    const params: unknown[] = [];
+    const whereClauses: string[] = ['1 = 1'];
+    if (departmentType) {
+        params.push(departmentType);
+        whereClauses.push(`p.department_type = $${params.length}`);
+    }
+    if (stationType) {
+        params.push(stationType);
+        whereClauses.push(`${normalizedStationTypeSql('s_filter.station_type_code')} = $${params.length}`);
+    }
+
+    const filterClause = `WHERE ${whereClauses.join(' AND ')}`;
     const bucketClause = (() => {
         switch (bucket) {
             case 'pending-review':
@@ -254,6 +328,7 @@ const buildDashboardStationQuery = (bucket: ReturnType<typeof normalizeDashboard
                     p.created_at AS project_created_at,
                     COALESCE(NULLIF(p.station_code, ''), p.project_code) AS join_code
                 FROM investment_projects p
+                LEFT JOIN station_information s_filter ON s_filter.station_code = COALESCE(NULLIF(p.station_code, ''), p.project_code)
                 ${filterClause}
                 ${bucketClause}
             )
@@ -490,8 +565,9 @@ app.get('/api/dashboard/stats', authenticateToken, async (req: Request, res: Res
         const userRole = authReq.user?.role;
         const userDepartment = authReq.user?.department;
         const departmentScoped = userRole !== 'super_admin' ? normalizeDepartment(userDepartment) : normalizeDepartment((req.query as any)?.departmentType);
+        const stationType = normalizeDashboardStationType((req.query as any)?.stationType);
 
-        const workflowScopeQuery = buildWorkflowScopeQuery(departmentScoped);
+        const workflowScopeQuery = buildWorkflowScopeQuery(departmentScoped, stationType);
 
         const queryOneWithFallback = async <T extends Record<string, unknown>>(
             label: string,
@@ -522,6 +598,38 @@ app.get('/api/dashboard/stats', authenticateToken, async (req: Request, res: Res
             }
         };
 
+        const stationSummaryParams: unknown[] = [];
+        const stationSummaryWhere = stationType
+            ? (() => {
+                stationSummaryParams.push(stationType);
+                return `WHERE ${normalizedStationTypeSql('station_type_code')} = $${stationSummaryParams.length}`;
+            })()
+            : '';
+
+        const projectSummaryParams: unknown[] = [];
+        const projectSummaryWhere = stationType
+            ? (() => {
+                projectSummaryParams.push(stationType);
+                return `WHERE ${normalizedStationTypeSql('s.station_type_code')} = $${projectSummaryParams.length}`;
+            })()
+            : '';
+
+        const recentProjectsParams: unknown[] = [];
+        const recentProjectsWhere = stationType
+            ? (() => {
+                recentProjectsParams.push(stationType);
+                return `WHERE ${normalizedStationTypeSql('s.station_type_code')} = $${recentProjectsParams.length}`;
+            })()
+            : '';
+
+        const stationsListParams: unknown[] = [];
+        const stationsListWhere = stationType
+            ? (() => {
+                stationsListParams.push(stationType);
+                return `WHERE ${normalizedStationTypeSql('station_type_code')} = $${stationsListParams.length}`;
+            })()
+            : '';
+
         const [stationsResult, projectsResult, recentResult, stationsListResult, workflowResult] = await Promise.all([
             queryOneWithFallback('stations summary', `
                 SELECT
@@ -532,7 +640,8 @@ app.get('/api/dashboard/stats', authenticateToken, async (req: Request, res: Res
                     COUNT(*) FILTER (WHERE station_status_code ILIKE '%soon%' OR station_status_code ILIKE '%opening%') AS opening_soon,
                     COUNT(*) FILTER (WHERE created_at >= date_trunc('month', CURRENT_DATE)) AS new_this_month
                 FROM station_information
-            `, [], {
+                ${stationSummaryWhere}
+            `, stationSummaryParams, {
                 total: 0,
                 under_execution: 0,
                 not_started: 0,
@@ -547,8 +656,10 @@ app.get('/api/dashboard/stats', authenticateToken, async (req: Request, res: Res
                     COUNT(*) FILTER (WHERE review_status = 'Validated') AS validated,
                     COUNT(*) FILTER (WHERE review_status = 'Approved') AS approved,
                     COUNT(*) FILTER (WHERE review_status = 'Rejected') AS rejected
-                FROM investment_projects
-            `, [], {
+                FROM investment_projects p
+                LEFT JOIN station_information s ON s.station_code = COALESCE(NULLIF(p.station_code, ''), p.project_code)
+                ${projectSummaryWhere}
+            `, projectSummaryParams, {
                 total: 0,
                 pending_review: 0,
                 validated: 0,
@@ -556,17 +667,20 @@ app.get('/api/dashboard/stats', authenticateToken, async (req: Request, res: Res
                 rejected: 0,
             }),
             queryRowsWithFallback('recent activities', `
-                SELECT project_name, review_status, created_at, department_type
-                FROM investment_projects
-                ORDER BY created_at DESC
+                SELECT p.project_name, p.review_status, p.created_at, p.department_type
+                FROM investment_projects p
+                LEFT JOIN station_information s ON s.station_code = COALESCE(NULLIF(p.station_code, ''), p.project_code)
+                ${recentProjectsWhere}
+                ORDER BY p.created_at DESC
                 LIMIT 5
-            `, []),
+            `, recentProjectsParams),
             queryRowsWithFallback('stations list', `
                 SELECT station_name, station_status_code, created_at
                 FROM station_information
+                ${stationsListWhere}
                 ORDER BY created_at DESC
                 LIMIT 10
-            `, []),
+            `, stationsListParams),
             queryOneWithFallback('workflow summary', workflowScopeQuery.text, workflowScopeQuery.params, {
                 new_project: 0,
                 pending_review: 0,
@@ -705,15 +819,17 @@ app.get('/api/dashboard/stations', authenticateToken, async (req: Request, res: 
         const userRole = authReq.user?.role;
         const userDepartment = authReq.user?.department;
         const bucket = normalizeDashboardBucket((req.query as any)?.bucket);
+        const stationType = normalizeDashboardStationType((req.query as any)?.stationType);
         const departmentType = userRole === 'super_admin'
             ? normalizeDepartment((req.query as any)?.departmentType)
             : normalizeDepartment(userDepartment);
 
-        const stationQuery = buildDashboardStationQuery(bucket, departmentType);
+        const stationQuery = buildDashboardStationQuery(bucket, departmentType, stationType);
         const result = await pool.query(stationQuery.text, stationQuery.params);
 
         res.status(200).json({
             bucket,
+            stationType,
             count: result.rows.length,
             data: result.rows,
         });
