@@ -139,6 +139,15 @@ export const getWorkflowTasks = async (req: AuthRequest, res: Response): Promise
             LEFT JOIN users acu ON acu.id = t.created_by
         `;
         const params: unknown[] = [];
+        const restrictInvestmentProjectTasks = userRole !== 'super_admin' && normalizeDepartment(userDepartment) !== 'project';
+        const investmentProjectTaskVisibilityClause = restrictInvestmentProjectTasks
+            ? `
+                AND NOT (
+                    t.investment_project_id IS NOT NULL
+                    AND LOWER(COALESCE(p.department_type, '')) IN ('investment', 'franchise', 'frenchise')
+                )
+            `
+            : '';
 
         if (userRole !== 'super_admin') {
             const department = normalizeDepartment(userDepartment);
@@ -149,6 +158,7 @@ export const getWorkflowTasks = async (req: AuthRequest, res: Response): Promise
             if (userRole === 'department_manager') {
                 query += `
                     WHERE (
+                        (
                         t.flow_type IN ('request', 'ceo_contact')
                         AND (t.assigned_to = $2 OR t.created_by = $2)
                     )
@@ -161,12 +171,15 @@ export const getWorkflowTasks = async (req: AuthRequest, res: Response): Promise
                             OR t.created_by = $2
                         )
                     )
+                    )
                 `;
                 params.push(department, userId);
+                query += investmentProjectTaskVisibilityClause;
             } else {
                 // Supervisors/employees should only see tasks explicitly assigned to them.
-                query += ' WHERE t.assigned_to = $1 OR t.created_by = $1';
+                query += ' WHERE (t.assigned_to = $1 OR t.created_by = $1)';
                 params.push(userId);
+                query += investmentProjectTaskVisibilityClause;
             }
         }
 
@@ -593,6 +606,21 @@ export const managerValidateWorkflowTask = async (req: AuthRequest, res: Respons
         }
 
         const task = taskLookup.rows[0];
+
+        const projectScopeResult = await pool.query(
+            `SELECT LOWER(COALESCE(department_type, '')) AS department_type
+             FROM investment_projects
+             WHERE id = $1
+             LIMIT 1`,
+            [task.investment_project_id],
+        );
+        const projectDepartmentType = String(projectScopeResult.rows[0]?.department_type || '');
+        const isProtectedProjectTask = projectDepartmentType === 'investment' || projectDepartmentType === 'franchise' || projectDepartmentType === 'frenchise';
+
+        if (isProtectedProjectTask && userRole !== 'super_admin' && userDepartment !== 'project') {
+            res.status(403).json({ error: 'Only project department manager or super admin can validate this project task' });
+            return;
+        }
 
         if (userRole !== 'super_admin') {
             if (!userDepartment) {
