@@ -30,7 +30,7 @@ router.get('/station/:stationCode', requireCapability('view'), requireStationDep
 router.get('/feasibility-stats', requireCapability('view'), getFeasibilityStats);
 router.get('/contract-stats', requireCapability('view'), getContractStats);
 router.get('/latest-saved', requireCapability('view'), getLatestSavedInvestmentProject);
-router.get('/:id', requireCapability('view'), requireDepartmentAccessByLookup(investmentProjectDepartmentLookup, 'id'), getInvestmentProjectById);
+router.get('/:id', requireCapability('view'), getInvestmentProjectById);
 router.put('/:id', requireCapability('edit'), requireDepartmentAccessByLookup(investmentProjectDepartmentLookup, 'id'), updateInvestmentProject);
 router.patch('/:id/review', requireCapability('edit'), requireDepartmentAccessByLookup(investmentProjectDepartmentLookup, 'id'), updateInvestmentProjectReviewStatus);
 router.delete('/:id', requireCapability('delete'), requireDepartmentAccessByLookup(investmentProjectDepartmentLookup, 'id'), deleteInvestmentProject);
