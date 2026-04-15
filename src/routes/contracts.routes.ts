@@ -1,6 +1,13 @@
 import { Router } from 'express';
 import {
-    createContract, getAllContracts, getContractsByStation, updateContract, deleteContract, getLatestSavedContract, reviewContract
+    createContract,
+    createOrGetContractDraftFromTask,
+    deleteContract,
+    getAllContracts,
+    getContractsByStation,
+    getLatestSavedContract,
+    reviewContract,
+    updateContract,
 } from '../controllers/contracts.controller';
 import { authenticateToken, requireCapability, requireDepartmentAccessByLookup, requireStationDepartmentAccess, requireSuperAdmin } from '../middleware/auth';
 
@@ -17,6 +24,7 @@ const router = Router();
 router.use(authenticateToken);
 
 router.post('/', requireCapability('create'), requireStationDepartmentAccess({ bodyField: 'stationCode' }), createContract);
+router.post('/from-task/:taskId', requireCapability('create'), createOrGetContractDraftFromTask);
 router.get('/', requireCapability('view'), getAllContracts);
 router.get('/latest-saved', requireCapability('view'), getLatestSavedContract);
 router.get('/station/:stationCode', requireCapability('view'), requireStationDepartmentAccess({ paramField: 'stationCode' }), getContractsByStation);

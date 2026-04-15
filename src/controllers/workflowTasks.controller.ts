@@ -60,6 +60,124 @@ const normalizeStationType = (value: unknown): 'investment' | 'franchise' | 'ope
 
 const isValidHttpUrl = (value: string): boolean => /^https?:\/\//i.test(value.trim());
 
+export const createContractRequestTask = async (req: AuthRequest, res: Response): Promise<void> => {
+    try {
+        await ensureWorkflowSchema();
+
+        const actorId = req.user?.id;
+        const actorRole = req.user?.role;
+        if (!actorId || !actorRole) {
+            res.status(401).json({ error: 'Unauthorized' });
+            return;
+        }
+
+        if (actorRole !== 'super_admin') {
+            res.status(403).json({ error: 'Only super admin can create contract request tasks' });
+            return;
+        }
+
+        const { stationCode, assignedToUserId, assigneeNote } = req.body as {
+            stationCode?: string;
+            assignedToUserId?: string;
+            assigneeNote?: string;
+        };
+
+        const resolvedStationCode = String(stationCode || '').trim();
+        const resolvedAssigneeId = String(assignedToUserId || '').trim();
+        const resolvedAssigneeNote = String(assigneeNote || '').trim();
+
+        if (!resolvedStationCode) {
+            res.status(400).json({ error: 'stationCode is required' });
+            return;
+        }
+
+        if (!resolvedAssigneeId) {
+            res.status(400).json({ error: 'assignedToUserId is required' });
+            return;
+        }
+
+        const assignee = await pool.query('SELECT id FROM users WHERE id = $1 LIMIT 1', [resolvedAssigneeId]);
+        if (!assignee.rows.length) {
+            res.status(404).json({ error: 'Assignee not found' });
+            return;
+        }
+
+        const inserted = await pool.query(
+            `INSERT INTO project_workflow_tasks (
+                investment_project_id,
+                title,
+                description,
+                flow_type,
+                status,
+                origin_department,
+                target_department,
+                assigned_to,
+                assigned_by,
+                assignee_note,
+                metadata,
+                created_by
+            )
+            VALUES (
+                NULL,
+                $1,
+                $2,
+                'contract',
+                'assigned',
+                'legal',
+                'legal',
+                $3,
+                $4,
+                $5,
+                $6::jsonb,
+                $4
+            )
+            RETURNING *`,
+            [
+                `Contract - ${resolvedStationCode}`,
+                `Contract request task created for station ${resolvedStationCode}.`,
+                resolvedAssigneeId,
+                actorId,
+                resolvedAssigneeNote || null,
+                JSON.stringify({ stationCode: resolvedStationCode }),
+            ],
+        );
+
+        const task = inserted.rows[0];
+
+        await recordWorkflowTransition({
+            entityType: 'workflow_task',
+            entityId: task.id,
+            oldState: null,
+            newState: task.status,
+            changedBy: actorId,
+            note: 'Contract task created by super admin',
+            metadata: {
+                stationCode: resolvedStationCode,
+                assignedToUserId: resolvedAssigneeId,
+            },
+        });
+
+        void recordActivity({
+            actorId,
+            action: 'create',
+            entityType: 'workflow_task',
+            entityId: task.id,
+            summary: 'created contract request task',
+            metadata: {
+                stationCode: resolvedStationCode,
+                assignedToUserId: resolvedAssigneeId,
+                hasAssigneeNote: Boolean(resolvedAssigneeNote),
+            },
+            sourcePath: '/api/tasks/contract-request',
+            requestMethod: 'POST',
+        }).catch((err) => console.error('Activity log failed:', err));
+
+        res.status(201).json({ data: task });
+    } catch (error: any) {
+        res.status(500).json({ error: 'Failed to create contract request task', details: error.message });
+    }
+};
+
 const upsertStationFromProject = async (projectId: string, userId: string): Promise<void> => {
     const projectResult = await pool.query('SELECT * FROM investment_projects WHERE id = $1 LIMIT 1', [projectId]);
     if (!projectResult.rows.length) {

@@ -2,6 +2,7 @@ import { Router } from 'express';
 import {
     addManagerAttachment,
     assignWorkflowTask,
+    createContractRequestTask,
     getAssignableUsers,
     getWorkflowTasks,
     getWorkflowTaskHistory,
@@ -18,6 +19,7 @@ router.use(authenticateToken);
 
 router.get('/', getWorkflowTasks);
 router.get('/assignable-users', getAssignableUsers);
+router.post('/contract-request', createContractRequestTask);
 router.get('/:id/history', getWorkflowTaskHistory);
 router.patch('/:id/assign', assignWorkflowTask);
 router.patch('/:id/manager-attachment', addManagerAttachment);

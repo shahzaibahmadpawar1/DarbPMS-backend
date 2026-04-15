@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import pool from '../config/database';
 import { recordActivity } from '../utils/activity';
 import { isSchemaCompatibilityError } from '../utils/dbErrors';
+import { ensureWorkflowSchema, recordWorkflowTransition } from '../utils/workflow';
 
 let contractLifecycleReady = false;
 
@@ -21,6 +22,8 @@ const ensureContractLifecycleSchema = async (): Promise<void> => {
     await pool.query(`ALTER TABLE contracts ADD COLUMN IF NOT EXISTS review_comment TEXT;`);
     await pool.query(`ALTER TABLE contracts ADD COLUMN IF NOT EXISTS reviewed_at TIMESTAMP WITH TIME ZONE;`);
     await pool.query(`ALTER TABLE contracts ADD COLUMN IF NOT EXISTS reviewed_by UUID REFERENCES users(id) ON DELETE SET NULL;`);
+    await pool.query(`ALTER TABLE contracts ADD COLUMN IF NOT EXISTS workflow_task_id UUID;`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_contracts_workflow_task_id ON contracts(workflow_task_id);`);
 
     await pool.query(`
         UPDATE contracts
@@ -37,6 +40,118 @@ const ensureContractLifecycleSchema = async (): Promise<void> => {
     `);
 
     contractLifecycleReady = true;
+};
+
+export const createOrGetContractDraftFromTask = async (req: Request, res: Response): Promise<void> => {
+    try {
+        await ensureWorkflowSchema();
+        await ensureContractLifecycleSchema();
+
+        const { taskId } = req.params as { taskId?: string };
+        const userId = (req as any).user?.id as string | undefined;
+        const userRole = (req as any).user?.role as string | undefined;
+
+        if (!taskId) {
+            res.status(400).json({ error: 'taskId is required' });
+            return;
+        }
+
+        if (!userId || !userRole) {
+            res.status(401).json({ error: 'Unauthorized' });
+            return;
+        }
+
+        const taskResult = await pool.query(
+            `SELECT id, assigned_to, status, flow_type, metadata
+             FROM project_workflow_tasks
+             WHERE id = $1
+             LIMIT 1`,
+            [taskId],
+        );
+
+        if (!taskResult.rows.length) {
+            res.status(404).json({ error: 'Task not found' });
+            return;
+        }
+
+        const task = taskResult.rows[0];
+        const isAssignee = task.assigned_to && String(task.assigned_to) === String(userId);
+        const canAccess = userRole === 'super_admin' || isAssignee;
+        if (!canAccess) {
+            res.status(403).json({ error: 'Only assigned user (or super admin) can start this contract task' });
+            return;
+        }
+
+        if (String(task.flow_type || '').trim() !== 'contract') {
+            res.status(409).json({ error: 'This task is not a contract task' });
+            return;
+        }
+
+        const metadata = (task.metadata || {}) as Record<string, any>;
+        const stationCode = String(metadata.stationCode || metadata.station_code || '').trim();
+        if (!stationCode) {
+            res.status(400).json({ error: 'Task metadata.stationCode is missing' });
+            return;
+        }
+
+        const existingContractId = String(metadata.contractId || metadata.contract_id || '').trim();
+        if (existingContractId) {
+            const existingContract = await pool.query(
+                'SELECT * FROM contracts WHERE id = $1 LIMIT 1',
+                [existingContractId],
+            );
+            if (existingContract.rows.length) {
+                res.status(200).json({ data: existingContract.rows[0] });
+                return;
+            }
+        }
+
+        // Create a new draft contract row bound to the task.
+        const draftContractNo = `CON-TASK-${String(taskId).slice(0, 8)}-${Date.now()}`;
+        const insert = await pool.query(
+            `INSERT INTO contracts (
+                contract_no,
+                review_status,
+                station_code,
+                created_by,
+                updated_by,
+                workflow_task_id,
+                is_submitted,
+                last_saved_at,
+                last_saved_by
+            ) VALUES ($1, 'Draft', $2, $3, $3, $4, FALSE, CURRENT_TIMESTAMP, $3)
+            RETURNING *`,
+            [draftContractNo, stationCode, userId, taskId],
+        );
+
+        const contract = insert.rows[0];
+
+        await pool.query(
+            `UPDATE project_workflow_tasks
+             SET metadata = jsonb_set(COALESCE(metadata, '{}'::jsonb), '{contractId}', to_jsonb($1::text), true),
+                 updated_at = CURRENT_TIMESTAMP
+             WHERE id = $2`,
+            [contract.id, taskId],
+        );
+
+        await recordWorkflowTransition({
+            entityType: 'workflow_task',
+            entityId: taskId,
+            oldState: task.status,
+            newState: String(task.status || 'assigned'),
+            changedBy: userId,
+            note: 'Contract draft created from task',
+            metadata: {
+                stationCode,
+                contractId: contract.id,
+            },
+        });
+
+        res.status(201).json({ data: contract });
+    } catch (error: any) {
+        console.error('Error creating contract draft from task:', error);
+        res.status(500).json({ error: 'Failed to start contract task', details: error.message });
+    }
 };
 
 export const createContract = async (req: Request, res: Response): Promise<void> => {
@@ -270,6 +385,39 @@ export const reviewContract = async (req: Request, res: Response): Promise<void>
             WHERE id = $4
             RETURNING *
         `, [reviewStatus, comment || null, userId, id]);
+
+        const workflowTaskId = updated.rows[0]?.workflow_task_id as string | null;
+        if (workflowTaskId) {
+            await ensureWorkflowSchema();
+            const taskLookup = await pool.query(
+                'SELECT status FROM project_workflow_tasks WHERE id = $1 LIMIT 1',
+                [workflowTaskId],
+            );
+            const oldState = taskLookup.rows[0]?.status ?? null;
+            const nextState = normalizedDecision === 'approved' ? 'approved' : 'rejected';
+
+            await pool.query(
+                `UPDATE project_workflow_tasks
+                 SET status = $1,
+                     super_admin_comment = $2,
+                     updated_at = CURRENT_TIMESTAMP
+                 WHERE id = $3`,
+                [nextState, comment || null, workflowTaskId],
+            );
+
+            await recordWorkflowTransition({
+                entityType: 'workflow_task',
+                entityId: workflowTaskId,
+                oldState,
+                newState: nextState,
+                changedBy: userId,
+                note: comment || `Contract ${nextState}`,
+                metadata: {
+                    contractId: id,
+                    stationCode: contract.station_code,
+                },
+            });
+        }
 
         void recordActivity({
             actorId: userId,
