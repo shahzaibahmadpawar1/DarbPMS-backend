@@ -62,7 +62,7 @@ export const createOrGetContractDraftFromTask = async (req: Request, res: Respon
         }
 
         const taskResult = await pool.query(
-            `SELECT id, assigned_to, status, flow_type, metadata
+            `SELECT id, assigned_to, status, flow_type, metadata, investment_project_id
              FROM project_workflow_tasks
              WHERE id = $1
              LIMIT 1`,
@@ -75,6 +75,11 @@ export const createOrGetContractDraftFromTask = async (req: Request, res: Respon
         }
 
         const task = taskResult.rows[0];
+
+        // #region agent log
+        fetch('http://127.0.0.1:7867/ingest/47e85903-0634-434d-b067-59a8a5f4b259',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'32f481'},body:JSON.stringify({sessionId:'32f481',runId:'pre-fix',hypothesisId:'H_meta_missing_or_mismatched',location:'contracts.controller.ts:createOrGetContractDraftFromTask:taskLoaded',message:'Loaded task for contract from-task',data:{taskId:String(taskId),flowType:String(task.flow_type||''),status:String(task.status||''),hasMetadata:Boolean(task.metadata),metadataType:typeof task.metadata,metadataKeys:task.metadata&&typeof task.metadata==='object'?Object.keys(task.metadata).slice(0,20):[],hasInvestmentProjectId:Boolean(task.investment_project_id)},timestamp:Date.now()})}).catch(()=>{});
+        // #endregion agent log
+
         const isAssignee = task.assigned_to && String(task.assigned_to) === String(userId);
         const canAccess = userRole === 'super_admin' || isAssignee;
         if (!canAccess) {
@@ -88,7 +93,12 @@ export const createOrGetContractDraftFromTask = async (req: Request, res: Respon
         }
 
         const metadata = (task.metadata || {}) as Record<string, any>;
-        const stationCode = String(metadata.stationCode || metadata.station_code || '').trim();
+        const stationCode = String(metadata.stationCode || metadata.station_code || metadata.stationcode || '').trim();
+
+        // #region agent log
+        fetch('http://127.0.0.1:7867/ingest/47e85903-0634-434d-b067-59a8a5f4b259',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'32f481'},body:JSON.stringify({sessionId:'32f481',runId:'pre-fix',hypothesisId:'H_stationCode_source',location:'contracts.controller.ts:createOrGetContractDraftFromTask:stationCodeExtract',message:'Extracted stationCode from task metadata',data:{taskId:String(taskId),stationCodePresent:Boolean(stationCode),stationCodeLength:stationCode?stationCode.length:0,stationCodeKeyHit:metadata.stationCode?'stationCode':(metadata.station_code?'station_code':(metadata.stationcode?'stationcode':''))},timestamp:Date.now()})}).catch(()=>{});
+        // #endregion agent log
+
         if (!stationCode) {
             res.status(400).json({ error: 'Task metadata.stationCode is missing' });
             return;
