@@ -577,7 +577,7 @@ export const managerValidateWorkflowTask = async (req: AuthRequest, res: Respons
         await ensureWorkflowSchema();
 
         const { id } = req.params;
-        const { comment } = req.body as { comment?: string };
+        const { comment, attachmentUrl } = req.body as { comment?: string; attachmentUrl?: string };
         const userId = req.user?.id;
         const userRole = req.user?.role;
         const userDepartment = normalizeDepartment(req.user?.department);
@@ -647,8 +647,14 @@ export const managerValidateWorkflowTask = async (req: AuthRequest, res: Respons
             return;
         }
 
-        const hasAttachment = Boolean(task.attachment_url || task.employee_attachment_url || task.manager_attachment_url);
-        if (!hasAttachment) {
+        const normalizedAttachmentUrl = String(attachmentUrl || '').trim();
+        if (normalizedAttachmentUrl && !isValidHttpUrl(normalizedAttachmentUrl)) {
+            res.status(400).json({ error: 'attachmentUrl must be a valid http/https URL' });
+            return;
+        }
+
+        const resolvedAttachmentUrl = normalizedAttachmentUrl || task.attachment_url || task.employee_attachment_url || task.manager_attachment_url;
+        if (!resolvedAttachmentUrl) {
             res.status(400).json({ error: 'One attachment is required before manager validation.' });
             return;
         }
@@ -659,10 +665,14 @@ export const managerValidateWorkflowTask = async (req: AuthRequest, res: Respons
             UPDATE project_workflow_tasks
             SET status = 'under_super_admin_review',
                 manager_note = COALESCE($1, manager_note),
+                manager_attachment_url = COALESCE($2, manager_attachment_url),
+                attachment_url = COALESCE($2, attachment_url),
+                attachment_uploaded_by = CASE WHEN $4 THEN $3 ELSE attachment_uploaded_by END,
+                attachment_uploaded_at = CASE WHEN $4 THEN CURRENT_TIMESTAMP ELSE attachment_uploaded_at END,
                 updated_at = CURRENT_TIMESTAMP
-            WHERE id = $2
+            WHERE id = $5
             RETURNING *
-        `, [comment || null, id]);
+        `, [comment || null, normalizedAttachmentUrl || null, userId || null, Boolean(normalizedAttachmentUrl), id]);
 
         await pool.query(`
             UPDATE investment_projects
