@@ -17,7 +17,16 @@ const ensureCheckConstraint = async (tableName: string, constraintName: string, 
         return;
     }
 
-    await pool.query(`ALTER TABLE ${tableName} ADD CONSTRAINT ${constraintName} ${definitionSql}`);
+    try {
+        await pool.query(`ALTER TABLE ${tableName} ADD CONSTRAINT ${constraintName} ${definitionSql}`);
+    } catch (error: any) {
+        // Race-safe: in serverless environments multiple requests may try to add the same constraint.
+        // Postgres reports duplicate_object with SQLSTATE 42710.
+        if (error?.code === '42710' || String(error?.message || '').toLowerCase().includes('already exists')) {
+            return;
+        }
+        throw error;
+    }
 };
 
 export const ensureWorkflowSchema = async (): Promise<void> => {
