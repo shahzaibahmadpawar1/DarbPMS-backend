@@ -24,7 +24,7 @@ const router = Router();
 router.use(authenticateToken);
 
 router.post('/', requireCapability('create'), requireStationDepartmentAccess({ bodyField: 'stationCode' }), createContract);
-router.post('/from-task/:taskId', requireCapability('create'), createOrGetContractDraftFromTask);
+router.post('/from-task/:taskId', requireCapability('view'), createOrGetContractDraftFromTask);
 router.get('/', requireCapability('view'), getAllContracts);
 router.get('/latest-saved', requireCapability('view'), getLatestSavedContract);
 router.get('/station/:stationCode', requireCapability('view'), requireStationDepartmentAccess({ paramField: 'stationCode' }), getContractsByStation);
