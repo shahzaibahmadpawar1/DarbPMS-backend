@@ -8,11 +8,19 @@ let contractLifecycleReady = false;
 const ensureContractLifecycleSchema = async (): Promise<void> => {
     if (contractLifecycleReady) return;
 
+    await pool.query(`ALTER TABLE contracts ADD COLUMN IF NOT EXISTS contract_attachment_url TEXT;`);
+    await pool.query(`ALTER TABLE contracts ADD COLUMN IF NOT EXISTS contract_attachment_name VARCHAR(255);`);
+    await pool.query(`ALTER TABLE contracts ADD COLUMN IF NOT EXISTS contract_attachment_uploaded_at TIMESTAMP WITH TIME ZONE;`);
+    await pool.query(`ALTER TABLE contracts ADD COLUMN IF NOT EXISTS contract_attachment_uploaded_by UUID REFERENCES users(id) ON DELETE SET NULL;`);
     await pool.query(`ALTER TABLE contracts ADD COLUMN IF NOT EXISTS is_submitted BOOLEAN NOT NULL DEFAULT TRUE;`);
     await pool.query(`ALTER TABLE contracts ADD COLUMN IF NOT EXISTS submitted_at TIMESTAMP WITH TIME ZONE;`);
     await pool.query(`ALTER TABLE contracts ADD COLUMN IF NOT EXISTS submitted_by UUID REFERENCES users(id) ON DELETE SET NULL;`);
     await pool.query(`ALTER TABLE contracts ADD COLUMN IF NOT EXISTS last_saved_at TIMESTAMP WITH TIME ZONE;`);
     await pool.query(`ALTER TABLE contracts ADD COLUMN IF NOT EXISTS last_saved_by UUID REFERENCES users(id) ON DELETE SET NULL;`);
+    await pool.query(`ALTER TABLE contracts ADD COLUMN IF NOT EXISTS review_status VARCHAR(50) DEFAULT 'Draft';`);
+    await pool.query(`ALTER TABLE contracts ADD COLUMN IF NOT EXISTS review_comment TEXT;`);
+    await pool.query(`ALTER TABLE contracts ADD COLUMN IF NOT EXISTS reviewed_at TIMESTAMP WITH TIME ZONE;`);
+    await pool.query(`ALTER TABLE contracts ADD COLUMN IF NOT EXISTS reviewed_by UUID REFERENCES users(id) ON DELETE SET NULL;`);
 
     await pool.query(`
         UPDATE contracts
@@ -20,6 +28,12 @@ const ensureContractLifecycleSchema = async (): Promise<void> => {
             submitted_at = COALESCE(submitted_at, created_at),
             submitted_by = COALESCE(submitted_by, created_by)
         WHERE is_submitted IS DISTINCT FROM TRUE;
+    `);
+
+    await pool.query(`
+        UPDATE contracts
+        SET review_status = COALESCE(review_status, CASE WHEN is_submitted THEN 'Pending Review' ELSE 'Draft' END)
+        WHERE review_status IS NULL OR review_status = '';
     `);
 
     contractLifecycleReady = true;
@@ -35,14 +49,22 @@ export const createContract = async (req: Request, res: Response): Promise<void>
             idNo, idCopy, mobileNo, email, tenantName, tenantNationality,
             tenantIdType, tenantIdNo, tenantIdCopy, tenantMobileNo, tenantEmail,
             duration, days, propertyValue, installments, dueDate, dueAmount,
-            paidAmount, notPaidAmount, duePeriod, stationCode, submit
+            paidAmount, notPaidAmount, duePeriod, stationCode, submit,
+            contractAttachmentUrl, contractAttachmentName
         } = req.body;
 
         const shouldSubmit = submit !== false;
         const resolvedContractNo = String(contractNo || '').trim() || `CON-DRAFT-${Date.now()}`;
+        const resolvedAttachmentUrl = String(contractAttachmentUrl || '').trim();
+        const resolvedAttachmentName = String(contractAttachmentName || '').trim();
 
         if (!stationCode || (shouldSubmit && !resolvedContractNo)) {
             res.status(400).json({ error: 'Station code is required. Submit also requires Contract No.' });
+            return;
+        }
+
+        if (shouldSubmit && !resolvedAttachmentUrl) {
+            res.status(400).json({ error: 'Contract attachment is required before submitting.' });
             return;
         }
 
@@ -51,22 +73,23 @@ export const createContract = async (req: Request, res: Response): Promise<void>
             INSERT INTO contracts (
                 contract_no, contract_type, contract_signature_date, contract_signature_location, 
                 tenancy_start_date, tenancy_end_date, lessor_name, nationality, id_type, 
-                id_no, id_copy, mobile_no, email, tenant_name, tenant_nationality, 
+                id_no, id_copy, contract_attachment_url, contract_attachment_name, mobile_no, email, tenant_name, tenant_nationality, 
                 tenant_id_type, tenant_id_no, tenant_id_copy, tenant_mobile_no, tenant_email, 
                 duration, days, property_value, installments, due_date, due_amount, 
-                paid_amount, not_paid_amount, due_period, station_code, created_by, updated_by
+                paid_amount, not_paid_amount, due_period, review_status, station_code, created_by, updated_by
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $31)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35)
             RETURNING *
         `;
 
         const values = [
             resolvedContractNo, contractType, contractSignatureDate || null, contractSignatureLocation,
             tenancyStartDate || null, tenancyEndDate || null, lessorName, nationality, idType,
-            idNo, idCopy, mobileNo, email, tenantName, tenantNationality,
-            tenantIdType, tenantIdNo, tenantIdCopy, tenantMobileNo, tenantEmail,
+            idNo, idCopy || null, resolvedAttachmentUrl || null, resolvedAttachmentName || null,
+            mobileNo, email, tenantName, tenantNationality,
+            tenantIdType, tenantIdNo, tenantIdCopy || null, tenantMobileNo, tenantEmail,
             duration, days || 0, propertyValue || 0, installments || 0, dueDate || null, dueAmount || 0,
-            paidAmount || 0, notPaidAmount || 0, duePeriod, stationCode, userId
+            paidAmount || 0, notPaidAmount || 0, duePeriod, shouldSubmit ? 'Pending Review' : 'Draft', stationCode, userId, userId
         ];
         const result = await pool.query(query, values);
 
@@ -76,9 +99,12 @@ export const createContract = async (req: Request, res: Response): Promise<void>
                 submitted_at = CASE WHEN $1 THEN CURRENT_TIMESTAMP ELSE NULL END,
                 submitted_by = CASE WHEN $1 THEN $2 ELSE NULL END,
                 last_saved_at = CASE WHEN $1 THEN NULL ELSE CURRENT_TIMESTAMP END,
-                last_saved_by = CASE WHEN $1 THEN NULL ELSE $2 END
-            WHERE id = $3
-        `, [shouldSubmit, userId || null, result.rows[0].id]);
+                last_saved_by = CASE WHEN $1 THEN NULL ELSE $2 END,
+                review_status = CASE WHEN $1 THEN 'Pending Review' ELSE 'Draft' END,
+                contract_attachment_uploaded_by = CASE WHEN $3 IS NOT NULL AND $3 <> '' THEN $2 ELSE contract_attachment_uploaded_by END,
+                contract_attachment_uploaded_at = CASE WHEN $3 IS NOT NULL AND $3 <> '' THEN CURRENT_TIMESTAMP ELSE contract_attachment_uploaded_at END
+            WHERE id = $4
+        `, [shouldSubmit, userId || null, resolvedAttachmentUrl, result.rows[0].id]);
 
         const refreshed = await pool.query('SELECT * FROM contracts WHERE id = $1 LIMIT 1', [result.rows[0].id]);
 
@@ -164,6 +190,8 @@ export const updateContract = async (req: Request, res: Response): Promise<void>
             return;
         }
 
+        const hasAttachmentUpdate = Boolean(String(reqBody.contractAttachmentUrl || reqBody.contract_attachment_url || '').trim());
+
         const setClause = fields.map(([k, _], i) => `${k.replace(/[A-Z]/g, letter => `_${letter.toLowerCase()}`)} = $${i + 1}`).join(', ');
         const query = `
             UPDATE contracts 
@@ -173,13 +201,16 @@ export const updateContract = async (req: Request, res: Response): Promise<void>
                 submitted_by = CASE WHEN $${fields.length + 1} THEN $${fields.length + 2} ELSE submitted_by END,
                 last_saved_at = CASE WHEN $${fields.length + 1} THEN last_saved_at ELSE CURRENT_TIMESTAMP END,
                 last_saved_by = CASE WHEN $${fields.length + 1} THEN last_saved_by ELSE $${fields.length + 2} END,
+                review_status = CASE WHEN $${fields.length + 1} THEN 'Pending Review' ELSE COALESCE(review_status, 'Draft') END,
+                contract_attachment_uploaded_by = CASE WHEN $${fields.length + 3} THEN $${fields.length + 2} ELSE contract_attachment_uploaded_by END,
+                contract_attachment_uploaded_at = CASE WHEN $${fields.length + 3} THEN CURRENT_TIMESTAMP ELSE contract_attachment_uploaded_at END,
                 updated_by = $${fields.length + 2},
                 updated_at = CURRENT_TIMESTAMP
-            WHERE id = $${fields.length + 3}
+            WHERE id = $${fields.length + 4}
             RETURNING *
         `;
 
-        const values = [...fields.map(([_, v]) => v), shouldSubmit, userId, id];
+        const values = [...fields.map(([_, v]) => v), shouldSubmit, userId, hasAttachmentUpdate, id];
         const result = await pool.query(query, values);
 
         if (result.rows.length === 0) {
@@ -196,6 +227,72 @@ export const updateContract = async (req: Request, res: Response): Promise<void>
     }
 };
 
+export const reviewContract = async (req: Request, res: Response): Promise<void> => {
+    try {
+        await ensureContractLifecycleSchema();
+
+        const { id } = req.params;
+        const { decision, comment } = req.body as { decision?: string; comment?: string };
+        const normalizedDecision = String(decision || '').trim().toLowerCase();
+        if (!(normalizedDecision === 'approved' || normalizedDecision === 'rejected')) {
+            res.status(400).json({ error: 'decision must be approved or rejected' });
+            return;
+        }
+
+        const userId = (req as any).user?.id;
+        const userRole = (req as any).user?.role;
+        if (!userId || userRole !== 'super_admin') {
+            res.status(403).json({ error: 'Only super admin can review contracts' });
+            return;
+        }
+
+        const existing = await pool.query('SELECT * FROM contracts WHERE id = $1 LIMIT 1', [id]);
+        if (!existing.rows.length) {
+            res.status(404).json({ error: 'Contract not found' });
+            return;
+        }
+
+        const contract = existing.rows[0];
+        if (!contract.contract_attachment_url) {
+            res.status(400).json({ error: 'Contract attachment is required before review.' });
+            return;
+        }
+
+        const reviewStatus = normalizedDecision === 'approved' ? 'Approved' : 'Rejected';
+        const updated = await pool.query(`
+            UPDATE contracts
+            SET review_status = $1,
+                review_comment = $2,
+                reviewed_at = CURRENT_TIMESTAMP,
+                reviewed_by = $3,
+                updated_by = $3,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = $4
+            RETURNING *
+        `, [reviewStatus, comment || null, userId, id]);
+
+        void recordActivity({
+            actorId: userId,
+            action: normalizedDecision === 'approved' ? 'approve' : 'reject',
+            entityType: 'contract',
+            entityId: id,
+            summary: `${normalizedDecision === 'approved' ? 'approved' : 'rejected'} contract`,
+            metadata: {
+                stationCode: contract.station_code,
+                hasAttachment: Boolean(contract.contract_attachment_url),
+                hasComment: Boolean(comment),
+            },
+            sourcePath: '/api/contracts/:id/review',
+            requestMethod: 'PATCH',
+        }).catch((err) => console.error('Activity log failed:', err));
+
+        res.status(200).json({ message: `Contract ${reviewStatus.toLowerCase()} successfully`, data: updated.rows[0] });
+    } catch (error: any) {
+        console.error('Error reviewing contract:', error);
+        res.status(500).json({ error: 'Failed to review contract', details: error.message });
+    }
+};
+
 export const getLatestSavedContract = async (req: Request, res: Response): Promise<void> => {
     try {
         await ensureContractLifecycleSchema();
@@ -209,10 +306,9 @@ export const getLatestSavedContract = async (req: Request, res: Response): Promi
 
         const result = await pool.query(`
             SELECT * FROM contracts
-            WHERE is_submitted = FALSE
-              AND created_by = $1
+                        WHERE created_by = $1
               AND ($2 = '' OR station_code = $2)
-            ORDER BY COALESCE(last_saved_at, updated_at, created_at) DESC
+                        ORDER BY COALESCE(reviewed_at, last_saved_at, submitted_at, updated_at, created_at) DESC
             LIMIT 1
         `, [userId, stationCode]);
 
