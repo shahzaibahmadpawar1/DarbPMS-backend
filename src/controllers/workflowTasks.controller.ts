@@ -1014,10 +1014,19 @@ export const reviewWorkflowTask = async (req: AuthRequest, res: Response): Promi
                     assigned_by = $3,
                     target_department = $4,
                     super_admin_comment = $5,
+                    metadata = jsonb_set(COALESCE(metadata, '{}'::jsonb), '{stationCode}', to_jsonb($7::text), true),
                     updated_at = CURRENT_TIMESTAMP
                 WHERE id = $6
                 RETURNING *
-            `, [normalizedBranch, assignedToUserId, userId, resolvedTargetDepartment, comment || null, id]);
+            `, [
+                normalizedBranch,
+                assignedToUserId,
+                userId,
+                resolvedTargetDepartment,
+                comment || null,
+                id,
+                String(task.project_code || '').trim(),
+            ]);
 
             await pool.query(`
                 UPDATE investment_projects
