@@ -93,11 +93,29 @@ export const createOrGetContractDraftFromTask = async (req: Request, res: Respon
         }
 
         const metadata = (task.metadata || {}) as Record<string, any>;
-        const stationCode = String(metadata.stationCode || metadata.station_code || metadata.stationcode || '').trim();
+        let stationCode = String(metadata.stationCode || metadata.station_code || metadata.stationcode || '').trim();
 
         // #region agent log
         fetch('http://127.0.0.1:7867/ingest/47e85903-0634-434d-b067-59a8a5f4b259',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'32f481'},body:JSON.stringify({sessionId:'32f481',runId:'pre-fix',hypothesisId:'H_stationCode_source',location:'contracts.controller.ts:createOrGetContractDraftFromTask:stationCodeExtract',message:'Extracted stationCode from task metadata',data:{taskId:String(taskId),stationCodePresent:Boolean(stationCode),stationCodeLength:stationCode?stationCode.length:0,stationCodeKeyHit:metadata.stationCode?'stationCode':(metadata.station_code?'station_code':(metadata.stationcode?'stationcode':''))},timestamp:Date.now()})}).catch(()=>{});
         // #endregion agent log
+
+        if (!stationCode && task.investment_project_id) {
+            const projectResult = await pool.query(
+                'SELECT project_code FROM investment_projects WHERE id = $1 LIMIT 1',
+                [task.investment_project_id],
+            );
+            const derived = String(projectResult.rows[0]?.project_code || '').trim();
+            if (derived) {
+                stationCode = derived;
+                await pool.query(
+                    `UPDATE project_workflow_tasks
+                     SET metadata = jsonb_set(COALESCE(metadata, '{}'::jsonb), '{stationCode}', to_jsonb($1::text), true),
+                         updated_at = CURRENT_TIMESTAMP
+                     WHERE id = $2`,
+                    [stationCode, taskId],
+                );
+            }
+        }
 
         if (!stationCode) {
             res.status(400).json({ error: 'Task metadata.stationCode is missing' });

@@ -1006,6 +1006,11 @@ export const reviewWorkflowTask = async (req: AuthRequest, res: Response): Promi
                 return;
             }
 
+            const stationCodeFromProject = String(
+                (await pool.query('SELECT project_code FROM investment_projects WHERE id = $1 LIMIT 1', [task.investment_project_id]))
+                    .rows[0]?.project_code || ''
+            ).trim();
+
             const updatedTask = await pool.query(`
                 UPDATE project_workflow_tasks
                 SET status = 'assigned',
@@ -1025,7 +1030,7 @@ export const reviewWorkflowTask = async (req: AuthRequest, res: Response): Promi
                 resolvedTargetDepartment,
                 comment || null,
                 id,
-                String(task.project_code || '').trim(),
+                stationCodeFromProject,
             ]);
 
             await pool.query(`
