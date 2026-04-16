@@ -60,6 +60,35 @@ const normalizeStationType = (value: unknown): 'investment' | 'franchise' | 'ope
 
 const isValidHttpUrl = (value: string): boolean => /^https?:\/\//i.test(value.trim());
 
+const isRequestTask = (task: { flow_type?: string | null }): boolean => task.flow_type === 'request';
+
+const getSingleAttachmentUrl = (task: {
+    attachment_url?: string | null;
+    manager_attachment_url?: string | null;
+    employee_attachment_url?: string | null;
+}): string | null => {
+    return task.attachment_url || task.manager_attachment_url || task.employee_attachment_url || null;
+};
+
+const resolveRequestAttachment = (
+    task: {
+        attachment_url?: string | null;
+        manager_attachment_url?: string | null;
+        employee_attachment_url?: string | null;
+    },
+    candidateUrl: string,
+): { resolvedAttachment: string | null; usesNewUpload: boolean } => {
+    const existingAttachment = getSingleAttachmentUrl(task);
+    if (candidateUrl) {
+        if (existingAttachment && existingAttachment !== candidateUrl) {
+            throw new Error('Only one attachment is allowed for request responses.');
+        }
+        return { resolvedAttachment: candidateUrl, usesNewUpload: candidateUrl !== existingAttachment };
+    }
+
+    return { resolvedAttachment: existingAttachment, usesNewUpload: false };
+};
+
 export const createContractRequestTask = async (req: AuthRequest, res: Response): Promise<void> => {
     try {
         await ensureWorkflowSchema();
@@ -426,9 +455,9 @@ export const assignWorkflowTask = async (req: AuthRequest, res: Response): Promi
         }
 
         const taskLookup = await pool.query(`
-            SELECT t.status, t.assigned_to, t.origin_department, t.target_department, p.workflow_path
+            SELECT t.status, t.assigned_to, t.origin_department, t.target_department, t.flow_type, p.workflow_path
             FROM project_workflow_tasks t
-            JOIN investment_projects p ON p.id = t.investment_project_id
+            LEFT JOIN investment_projects p ON p.id = t.investment_project_id
             WHERE t.id = $1
             LIMIT 1
         `, [id]);
@@ -459,7 +488,18 @@ export const assignWorkflowTask = async (req: AuthRequest, res: Response): Promi
             }
         }
 
-        if (task.status !== 'manager_queue' || task.assigned_to) {
+        const requestTask = isRequestTask(task);
+        if (requestTask) {
+            if (task.status !== 'assigned') {
+                res.status(409).json({ error: 'Request task must be in assigned state before delegation' });
+                return;
+            }
+
+            if (task.assigned_to !== actorId && actorRole !== 'super_admin') {
+                res.status(403).json({ error: 'Only current assignee can delegate this request task' });
+                return;
+            }
+        } else if (task.status !== 'manager_queue' || task.assigned_to) {
             res.status(409).json({ error: 'Task is already assigned and cannot be reassigned' });
             return;
         }
@@ -483,8 +523,6 @@ export const assignWorkflowTask = async (req: AuthRequest, res: Response): Promi
                 status = 'assigned',
                 updated_at = CURRENT_TIMESTAMP
             WHERE id = $5
-              AND status = 'manager_queue'
-              AND assigned_to IS NULL
             RETURNING *
         `, [assignedToUserId, actorId, resolvedTargetDepartment, String(assigneeNote || '').trim() || null, id]);
 
@@ -496,7 +534,7 @@ export const assignWorkflowTask = async (req: AuthRequest, res: Response): Promi
         await recordWorkflowTransition({
             entityType: 'workflow_task',
             entityId: id,
-            oldState: 'manager_queue',
+            oldState: task.status,
             newState: 'assigned',
             changedBy: actorId,
             note: 'Task assigned to employee',
@@ -504,6 +542,7 @@ export const assignWorkflowTask = async (req: AuthRequest, res: Response): Promi
                 assignedToUserId,
                 targetDepartment: resolvedTargetDepartment,
                 assigneeNote: String(assigneeNote || '').trim() || null,
+                requestTask,
             },
         });
 
@@ -614,7 +653,7 @@ export const submitEmployeeAttachment = async (req: AuthRequest, res: Response):
         const taskLookup = await pool.query(`
             SELECT t.*, p.workflow_path
             FROM project_workflow_tasks t
-            JOIN investment_projects p ON p.id = t.investment_project_id
+            LEFT JOIN investment_projects p ON p.id = t.investment_project_id
             WHERE t.id = $1
             LIMIT 1
         `, [id]);
@@ -631,17 +670,33 @@ export const submitEmployeeAttachment = async (req: AuthRequest, res: Response):
             return;
         }
 
-        const resolvedAttachment =
-            normalizedAttachmentUrl
-            || task.attachment_url
-            || task.employee_attachment_url
-            || task.manager_attachment_url;
-        const hasAtLeastOneAttachment = Boolean(resolvedAttachment);
-        if (!hasAtLeastOneAttachment) {
-            res.status(400).json({
-                error: 'Attachment is required before submitting.',
-            });
-            return;
+        const requestTask = isRequestTask(task);
+        let resolvedAttachment: string | null = null;
+        let usesNewUpload = false;
+
+        if (requestTask) {
+            try {
+                const resolved = resolveRequestAttachment(task, normalizedAttachmentUrl);
+                resolvedAttachment = resolved.resolvedAttachment;
+                usesNewUpload = resolved.usesNewUpload;
+            } catch (attachmentError: any) {
+                res.status(409).json({ error: attachmentError.message });
+                return;
+            }
+        } else {
+            resolvedAttachment =
+                normalizedAttachmentUrl
+                || task.attachment_url
+                || task.employee_attachment_url
+                || task.manager_attachment_url;
+
+            if (!resolvedAttachment) {
+                res.status(400).json({
+                    error: 'Attachment is required before submitting.',
+                });
+                return;
+            }
+            usesNewUpload = Boolean(normalizedAttachmentUrl);
         }
 
         const nextStatus = task.workflow_path ? 'manager_submitted' : 'employee_submitted';
@@ -669,8 +724,9 @@ export const submitEmployeeAttachment = async (req: AuthRequest, res: Response):
             note: note || 'Employee submitted attachment',
             metadata: {
                 attachmentUrl: resolvedAttachment,
-                usedExistingAttachment: !normalizedAttachmentUrl,
+                usedExistingAttachment: !usesNewUpload,
                 branchWorkflow: Boolean(task.workflow_path),
+                requestTask,
             },
         });
 
@@ -684,7 +740,7 @@ export const submitEmployeeAttachment = async (req: AuthRequest, res: Response):
             metadata: {
                 newStatus: nextStatus,
                 hasNote: Boolean(note),
-                usedExistingAttachment: !normalizedAttachmentUrl,
+                usedExistingAttachment: !usesNewUpload,
             },
             sourcePath: '/api/workflow-tasks/:id/submit-attachment',
             requestMethod: 'POST',
@@ -724,7 +780,7 @@ export const managerValidateWorkflowTask = async (req: AuthRequest, res: Respons
         const taskLookup = await pool.query(`
             SELECT t.*, p.workflow_path, p.review_status
             FROM project_workflow_tasks t
-            JOIN investment_projects p ON p.id = t.investment_project_id
+            LEFT JOIN investment_projects p ON p.id = t.investment_project_id
             WHERE t.id = $1
             LIMIT 1
         `, [id]);
@@ -735,6 +791,76 @@ export const managerValidateWorkflowTask = async (req: AuthRequest, res: Respons
         }
 
         const task = taskLookup.rows[0];
+        const requestTask = isRequestTask(task);
+
+        if (requestTask) {
+            if (task.status !== 'employee_submitted') {
+                res.status(409).json({ error: 'Request task must be employee submitted before manager validation' });
+                return;
+            }
+
+            const normalizedAttachmentUrl = String(attachmentUrl || '').trim();
+            if (normalizedAttachmentUrl && !isValidHttpUrl(normalizedAttachmentUrl)) {
+                res.status(400).json({ error: 'attachmentUrl must be a valid http/https URL' });
+                return;
+            }
+
+            let resolvedAttachment: string | null = null;
+            let usesNewUpload = false;
+            try {
+                const resolved = resolveRequestAttachment(task, normalizedAttachmentUrl);
+                resolvedAttachment = resolved.resolvedAttachment;
+                usesNewUpload = resolved.usesNewUpload;
+            } catch (attachmentError: any) {
+                res.status(409).json({ error: attachmentError.message });
+                return;
+            }
+
+            const taskResult = await pool.query(`
+                UPDATE project_workflow_tasks
+                SET status = 'pending_requester_decision',
+                    manager_note = COALESCE($1, manager_note),
+                    manager_attachment_url = COALESCE($2, manager_attachment_url),
+                    attachment_url = COALESCE($2, attachment_url),
+                    attachment_uploaded_by = CASE WHEN $4 THEN $3 ELSE attachment_uploaded_by END,
+                    attachment_uploaded_at = CASE WHEN $4 THEN CURRENT_TIMESTAMP ELSE attachment_uploaded_at END,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id = $5
+                RETURNING *
+            `, [comment || null, resolvedAttachment, userId || null, usesNewUpload, id]);
+
+            await recordWorkflowTransition({
+                entityType: 'workflow_task',
+                entityId: id,
+                oldState: task.status,
+                newState: 'pending_requester_decision',
+                changedBy: userId,
+                note: comment || 'Department manager validated request response',
+                metadata: {
+                    actorRole: userRole,
+                    requestTask: true,
+                },
+            });
+
+            void recordActivity({
+                actorId: userId,
+                action: 'validate',
+                entityType: 'workflow_task',
+                entityId: id,
+                summary: 'validated request and sent to requester decision',
+                metadata: {
+                    hasComment: Boolean(comment),
+                },
+                sourcePath: '/api/workflow-tasks/:id/validate',
+                requestMethod: 'POST',
+            }).catch((err) => console.error('Activity log failed:', err));
+
+            res.status(200).json({
+                message: 'Request response validated and sent to requester decision',
+                data: taskResult.rows[0],
+            });
+            return;
+        }
 
         const projectScopeResult = await pool.query(
             `SELECT LOWER(COALESCE(department_type, '')) AS department_type
@@ -909,7 +1035,7 @@ export const reviewWorkflowTask = async (req: AuthRequest, res: Response): Promi
                 return;
             }
 
-            if (!(task.status === 'assigned' || task.status === 'manager_queue')) {
+            if (!(task.status === 'assigned' || task.status === 'manager_queue' || task.status === 'employee_submitted')) {
                 res.status(409).json({ error: 'Task must be assigned before review' });
                 return;
             }
@@ -938,16 +1064,50 @@ export const reviewWorkflowTask = async (req: AuthRequest, res: Response): Promi
                 }
             }
 
-            const nextStatus = normalizedDecision as 'approved' | 'rejected';
+            const nextStatus = task.flow_type === 'request' && normalizedDecision === 'approved'
+                ? 'pending_requester_decision'
+                : (normalizedDecision as 'approved' | 'rejected');
             const noteColumn = userRole === 'super_admin' ? 'super_admin_comment' : 'manager_note';
-            const updatedTask = await pool.query(`
-                UPDATE project_workflow_tasks
-                SET status = $1,
-                    ${noteColumn} = $2,
-                    updated_at = CURRENT_TIMESTAMP
-                WHERE id = $3
-                RETURNING *
-            `, [nextStatus, comment || null, id]);
+            const normalizedAttachmentUrl = String((req.body as { attachmentUrl?: string }).attachmentUrl || '').trim();
+            if (normalizedAttachmentUrl && !isValidHttpUrl(normalizedAttachmentUrl)) {
+                res.status(400).json({ error: 'attachmentUrl must be a valid http/https URL' });
+                return;
+            }
+
+            let resolvedAttachment: string | null = null;
+            let usesNewUpload = false;
+            if (task.flow_type === 'request') {
+                try {
+                    const resolved = resolveRequestAttachment(task, normalizedAttachmentUrl);
+                    resolvedAttachment = resolved.resolvedAttachment;
+                    usesNewUpload = resolved.usesNewUpload;
+                } catch (attachmentError: any) {
+                    res.status(409).json({ error: attachmentError.message });
+                    return;
+                }
+            }
+
+            const updatedTask = task.flow_type === 'request'
+                ? await pool.query(`
+                    UPDATE project_workflow_tasks
+                    SET status = $1,
+                        ${noteColumn} = $2,
+                        manager_attachment_url = COALESCE($3, manager_attachment_url),
+                        attachment_url = COALESCE($3, attachment_url),
+                        attachment_uploaded_by = CASE WHEN $4 THEN $5 ELSE attachment_uploaded_by END,
+                        attachment_uploaded_at = CASE WHEN $4 THEN CURRENT_TIMESTAMP ELSE attachment_uploaded_at END,
+                        updated_at = CURRENT_TIMESTAMP
+                    WHERE id = $6
+                    RETURNING *
+                `, [nextStatus, comment || null, resolvedAttachment, usesNewUpload, userId, id])
+                : await pool.query(`
+                    UPDATE project_workflow_tasks
+                    SET status = $1,
+                        ${noteColumn} = $2,
+                        updated_at = CURRENT_TIMESTAMP
+                    WHERE id = $3
+                    RETURNING *
+                `, [nextStatus, comment || null, id]);
 
             await recordWorkflowTransition({
                 entityType: 'workflow_task',
@@ -959,6 +1119,7 @@ export const reviewWorkflowTask = async (req: AuthRequest, res: Response): Promi
                 metadata: {
                     taskType: task.flow_type,
                     actorRole: userRole,
+                    requiresRequesterDecision: task.flow_type === 'request' && normalizedDecision === 'approved',
                 },
             });
 
@@ -967,17 +1128,22 @@ export const reviewWorkflowTask = async (req: AuthRequest, res: Response): Promi
                 action: normalizedDecision === 'approved' ? 'approve' : 'reject',
                 entityType: 'workflow_task',
                 entityId: id,
-                summary: `${normalizedDecision === 'approved' ? 'approved' : 'rejected'} ${task.flow_type.replace('_', ' ')} task`,
+                summary: task.flow_type === 'request' && normalizedDecision === 'approved'
+                    ? 'submitted request response for requester decision'
+                    : `${normalizedDecision === 'approved' ? 'approved' : 'rejected'} ${task.flow_type.replace('_', ' ')} task`,
                 metadata: {
                     taskType: task.flow_type,
                     hasComment: Boolean(comment),
+                    hasAttachment: Boolean(resolvedAttachment),
                 },
                 sourcePath: '/api/workflow-tasks/:id/review',
                 requestMethod: 'POST',
             }).catch((err) => console.error('Activity log failed:', err));
 
             res.status(200).json({
-                message: `Task ${nextStatus} successfully`,
+                message: nextStatus === 'pending_requester_decision'
+                    ? 'Response submitted and pending requester decision'
+                    : `Task ${nextStatus} successfully`,
                 data: updatedTask.rows[0],
             });
             return;
@@ -1181,6 +1347,107 @@ export const reviewWorkflowTask = async (req: AuthRequest, res: Response): Promi
         });
     } catch (error: any) {
         res.status(500).json({ error: 'Failed to review workflow task', details: error.message });
+    }
+};
+
+export const submitRequesterDecision = async (req: AuthRequest, res: Response): Promise<void> => {
+    try {
+        await ensureWorkflowSchema();
+
+        const { id } = req.params;
+        const { decision, comment } = req.body as { decision?: string; comment?: string };
+        const userId = req.user?.id;
+
+        if (!userId) {
+            res.status(401).json({ error: 'Unauthorized' });
+            return;
+        }
+
+        const normalizedDecision = String(decision || '').trim().toLowerCase();
+        if (!(normalizedDecision === 'accept' || normalizedDecision === 'accepted' || normalizedDecision === 'decline' || normalizedDecision === 'declined')) {
+            res.status(400).json({ error: 'decision must be accept or decline' });
+            return;
+        }
+
+        const taskLookup = await pool.query(
+            `SELECT * FROM project_workflow_tasks WHERE id = $1 LIMIT 1`,
+            [id],
+        );
+
+        if (!taskLookup.rows.length) {
+            res.status(404).json({ error: 'Task not found' });
+            return;
+        }
+
+        const task = taskLookup.rows[0];
+        if (!isRequestTask(task)) {
+            res.status(409).json({ error: 'Requester decision is only available for request tasks' });
+            return;
+        }
+
+        if (task.status !== 'pending_requester_decision') {
+            res.status(409).json({ error: 'Task is not ready for requester decision' });
+            return;
+        }
+
+        const metadata = task.metadata && typeof task.metadata === 'object' ? task.metadata : {};
+        const requesterId = String((metadata as any)?.requester?.id || task.created_by || '').trim();
+        if (!requesterId || requesterId !== userId) {
+            res.status(403).json({ error: 'Only the original requester can submit this decision' });
+            return;
+        }
+
+        const nextStatus = normalizedDecision.startsWith('accept') ? 'requester_accepted' : 'requester_declined';
+        const updated = await pool.query(
+            `
+                UPDATE project_workflow_tasks
+                SET status = $1,
+                    metadata = jsonb_set(
+                        jsonb_set(COALESCE(metadata, '{}'::jsonb), '{requesterDecision}', to_jsonb($2::text), true),
+                        '{requesterDecisionComment}',
+                        to_jsonb($3::text),
+                        true
+                    ),
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id = $4
+                RETURNING *
+            `,
+            [nextStatus, nextStatus, String(comment || '').trim(), id],
+        );
+
+        await recordWorkflowTransition({
+            entityType: 'workflow_task',
+            entityId: id,
+            oldState: task.status,
+            newState: nextStatus,
+            changedBy: userId,
+            note: String(comment || '').trim() || `Requester ${nextStatus.replace('requester_', '').replace('_', ' ')}`,
+            metadata: {
+                taskType: 'request',
+                requesterDecision: nextStatus,
+            },
+        });
+
+        void recordActivity({
+            actorId: userId,
+            action: normalizedDecision.startsWith('accept') ? 'approve' : 'reject',
+            entityType: 'workflow_task',
+            entityId: id,
+            summary: normalizedDecision.startsWith('accept') ? 'requester accepted request response' : 'requester declined request response',
+            metadata: {
+                nextStatus,
+                hasComment: Boolean(String(comment || '').trim()),
+            },
+            sourcePath: '/api/workflow-tasks/:id/requester-decision',
+            requestMethod: 'POST',
+        }).catch((err) => console.error('Activity log failed:', err));
+
+        res.status(200).json({
+            message: normalizedDecision.startsWith('accept') ? 'Request accepted successfully' : 'Request declined successfully',
+            data: updated.rows[0],
+        });
+    } catch (error: any) {
+        res.status(500).json({ error: 'Failed to submit requester decision', details: error.message });
     }
 };
 

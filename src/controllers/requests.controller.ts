@@ -3,6 +3,7 @@ import pool from '../config/database';
 import { AuthRequest } from '../types';
 import { ensureWorkflowSchema, recordWorkflowTransition } from '../utils/workflow';
 import { recordActivity } from '../utils/activity';
+import { isValidRequestTypeForDepartment } from '../utils/requestTypes';
 
 const normalizeDepartment = (
     value: unknown,
@@ -53,13 +54,14 @@ export const submitRequest = async (req: AuthRequest, res: Response): Promise<vo
 
         const userId = req.user?.id;
         const username = req.user?.username || 'Requester';
-        const { requestType, department, priority, subject, dueDate, description } = req.body as {
+        const { requestType, department, priority, subject, dueDate, description, stationCodes } = req.body as {
             requestType?: string;
             department?: string;
             priority?: string;
             subject?: string;
             dueDate?: string;
             description?: string;
+            stationCodes?: unknown;
         };
 
         if (!userId) {
@@ -71,6 +73,34 @@ export const submitRequest = async (req: AuthRequest, res: Response): Promise<vo
         if (!normalizedDepartment || normalizedDepartment === 'ceo') {
             res.status(400).json({ error: 'A valid department is required' });
             return;
+        }
+
+        const normalizedRequestType = String(requestType || '').trim().toLowerCase();
+        if (!isValidRequestTypeForDepartment(normalizedDepartment, normalizedRequestType)) {
+            res.status(400).json({ error: 'Invalid request type for the selected department' });
+            return;
+        }
+
+        const normalizedStationCodes = Array.isArray(stationCodes)
+            ? Array.from(new Set(
+                stationCodes
+                    .map((code) => String(code || '').trim())
+                    .filter((code) => code.length > 0),
+            ))
+            : [];
+
+        if (normalizedStationCodes.length > 0) {
+            const stationsResult = await pool.query(
+                'SELECT station_code FROM station_information WHERE station_code = ANY($1::text[])',
+                [normalizedStationCodes],
+            );
+
+            const existingCodes = new Set<string>(stationsResult.rows.map((row) => String(row.station_code)));
+            const missingCodes = normalizedStationCodes.filter((code) => !existingCodes.has(code));
+            if (missingCodes.length > 0) {
+                res.status(400).json({ error: `Unknown station codes: ${missingCodes.join(', ')}` });
+                return;
+            }
         }
 
         const trimmedSubject = String(subject || '').trim();
@@ -91,12 +121,13 @@ export const submitRequest = async (req: AuthRequest, res: Response): Promise<vo
         }
 
         const metadata = {
-            requestType: requestType || null,
+            requestType: normalizedRequestType,
             department: normalizedDepartment,
             priority: priority || null,
             subject: trimmedSubject,
             dueDate: dueDate || null,
             description: trimmedDescription,
+            stationCodes: normalizedStationCodes,
             requester: {
                 id: userId,
                 username,

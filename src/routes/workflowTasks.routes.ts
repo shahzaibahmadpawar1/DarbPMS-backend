@@ -8,6 +8,7 @@ import {
     getWorkflowTaskHistory,
     managerValidateWorkflowTask,
     reviewWorkflowTask,
+    submitRequesterDecision,
     submitManagerAttachment,
     submitEmployeeAttachment,
 } from '../controllers/workflowTasks.controller';
@@ -27,5 +28,6 @@ router.patch('/:id/manager-submit', submitManagerAttachment);
 router.patch('/:id/employee-submit', submitEmployeeAttachment);
 router.patch('/:id/manager-validate', managerValidateWorkflowTask);
 router.patch('/:id/review', reviewWorkflowTask);
+router.patch('/:id/requester-decision', submitRequesterDecision);
 
 export default router;
