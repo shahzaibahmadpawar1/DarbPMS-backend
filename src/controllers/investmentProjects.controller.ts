@@ -275,7 +275,8 @@ export const getAllInvestmentProjects = async (req: Request, res: Response): Pro
             limit?: string;
             offset?: string;
         };
-        const effectiveDepartmentType = userRole === 'super_admin' || userRole === 'ceo'
+        const normalizedDepartment = String(userDepartment || '').trim().toLowerCase();
+        const effectiveDepartmentType = userRole === 'super_admin' || userRole === 'ceo' || normalizedDepartment === 'project'
             ? departmentType
             : userDepartment;
 
@@ -317,7 +318,8 @@ export const getInvestmentProjectsByStation = async (req: Request, res: Response
             limit?: string;
             offset?: string;
         };
-        const effectiveDepartmentType = userRole === 'super_admin' || userRole === 'ceo'
+        const normalizedDepartment = String(userDepartment || '').trim().toLowerCase();
+        const effectiveDepartmentType = userRole === 'super_admin' || userRole === 'ceo' || normalizedDepartment === 'project'
             ? departmentType
             : userDepartment;
 

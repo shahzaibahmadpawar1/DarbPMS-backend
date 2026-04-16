@@ -159,7 +159,7 @@ export const getAllStationInformation = async (req: Request, res: Response): Pro
             conditions.push(`station_code = ANY($${params.length})`);
         }
 
-        if (userRole !== 'super_admin' && userRole !== 'ceo' && userDepartment) {
+        if (userRole !== 'super_admin' && userRole !== 'ceo' && userDepartment && String(userDepartment).trim().toLowerCase() !== 'project') {
             params.push(userDepartment);
             conditions.push(`(CASE WHEN lower(station_type_code) = 'frenchise' THEN 'franchise' ELSE lower(station_type_code) END) = $${params.length}`);
         }
