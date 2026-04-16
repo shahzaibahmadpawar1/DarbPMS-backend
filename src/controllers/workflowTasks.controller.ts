@@ -472,6 +472,7 @@ export const assignWorkflowTask = async (req: AuthRequest, res: Response): Promi
         const task = taskLookup.rows[0];
 
         const ceoContactTask = isCeoContactTask(task);
+        const requestTask = isRequestTask(task);
 
         if (actorRole !== 'super_admin' && actorRole !== 'ceo') {
             if (!actorDepartment) {
@@ -487,13 +488,12 @@ export const assignWorkflowTask = async (req: AuthRequest, res: Response): Promi
                 return;
             }
 
-            if (resolvedTargetDepartment !== actorDepartment) {
+            if (!requestTask && resolvedTargetDepartment !== actorDepartment) {
                 res.status(403).json({ error: 'Department managers and supervisors can only assign within their own department' });
                 return;
             }
         }
 
-        const requestTask = isRequestTask(task);
         if (requestTask) {
             if (task.status !== 'assigned') {
                 res.status(409).json({ error: 'Request task must be in assigned state before delegation' });
