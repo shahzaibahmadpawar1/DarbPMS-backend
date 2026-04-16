@@ -463,9 +463,40 @@ export const updateContract = async (req: Request, res: Response): Promise<void>
             return;
         }
 
+        const numericColumns = new Set([
+            'property_value',
+            'due_amount',
+            'paid_amount',
+            'not_paid_amount',
+        ]);
+        const integerColumns = new Set([
+            'days',
+            'installments',
+        ]);
+        const dateColumns = new Set([
+            'contract_signature_date',
+            'tenancy_start_date',
+            'tenancy_end_date',
+            'due_date',
+        ]);
+
+        const normalizedFields = fields.map(([key, rawValue]) => {
+            const column = key.replace(/[A-Z]/g, letter => `_${letter.toLowerCase()}`);
+            let value: unknown = rawValue;
+
+            if (typeof value === 'string') {
+                value = value.trim();
+                if ((numericColumns.has(column) || integerColumns.has(column) || dateColumns.has(column)) && value === '') {
+                    value = null;
+                }
+            }
+
+            return [column, value] as const;
+        });
+
         const hasAttachmentUpdate = Boolean(String(reqBody.contractAttachmentUrl || reqBody.contract_attachment_url || '').trim());
 
-        const setClause = fields.map(([k, _], i) => `${k.replace(/[A-Z]/g, letter => `_${letter.toLowerCase()}`)} = $${i + 1}`).join(', ');
+        const setClause = normalizedFields.map(([column], i) => `${column} = $${i + 1}`).join(', ');
         const query = `
             UPDATE contracts 
             SET ${setClause},
@@ -483,7 +514,7 @@ export const updateContract = async (req: Request, res: Response): Promise<void>
             RETURNING *
         `;
 
-        const values = [...fields.map(([_, v]) => v), shouldSubmit, userId, hasAttachmentUpdate, id];
+        const values = [...normalizedFields.map(([_, value]) => value), shouldSubmit, userId, hasAttachmentUpdate, id];
         const result = await pool.query(query, values);
 
         if (result.rows.length === 0) {
@@ -495,6 +526,10 @@ export const updateContract = async (req: Request, res: Response): Promise<void>
         console.error('Error updating contract:', error);
         if (error.code === '23503') {
             res.status(400).json({ error: 'Invalid station code. The station does not exist in station_information.' });
+            return;
+        }
+        if (error.code === '22P02') {
+            res.status(400).json({ error: 'Invalid number/date input in contract form.', details: error.message });
             return;
         }
         res.status(500).json({
