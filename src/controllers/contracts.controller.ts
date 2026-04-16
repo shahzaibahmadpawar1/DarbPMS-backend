@@ -6,6 +6,16 @@ import { ensureWorkflowSchema, recordWorkflowTransition } from '../utils/workflo
 
 let contractLifecycleReady = false;
 
+const normalizeProjectStationType = (value: unknown): 'investment' | 'franchise' | 'operation' | 'rent' | 'ownership' => {
+    const normalized = String(value || '').trim().toLowerCase();
+    if (normalized === 'frenchise') return 'franchise';
+    if (normalized === 'franchise') return 'franchise';
+    if (normalized === 'operation') return 'operation';
+    if (normalized === 'rent') return 'rent';
+    if (normalized === 'ownership') return 'ownership';
+    return 'investment';
+};
+
 const ensureContractLifecycleSchema = async (): Promise<void> => {
     if (contractLifecycleReady) return;
 
@@ -42,6 +52,71 @@ const ensureContractLifecycleSchema = async (): Promise<void> => {
     contractLifecycleReady = true;
 };
 
+const stationExists = async (stationCode: string): Promise<boolean> => {
+    const result = await pool.query(
+        'SELECT 1 FROM station_information WHERE station_code = $1 LIMIT 1',
+        [stationCode],
+    );
+    return result.rows.length > 0;
+};
+
+const upsertStationFromProjectForContract = async (projectId: string, userId: string): Promise<string> => {
+    const projectResult = await pool.query(
+        `SELECT project_code, project_name, city, district, google_location, department_type, project_status
+         FROM investment_projects
+         WHERE id = $1
+         LIMIT 1`,
+        [projectId],
+    );
+
+    if (!projectResult.rows.length) {
+        throw new Error('Investment project not found for this contract task');
+    }
+
+    const project = projectResult.rows[0];
+    const stationCode = String(project.project_code || '').trim();
+    const stationName = String(project.project_name || '').trim();
+    if (!stationCode || !stationName) {
+        throw new Error('Station creation failed: project code and project name are required');
+    }
+
+    await pool.query(
+        `INSERT INTO station_information (
+            station_code,
+            station_name,
+            city,
+            district,
+            geographic_location,
+            station_type_code,
+            station_status_code,
+            created_by,
+            updated_by
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8)
+        ON CONFLICT (station_code) DO UPDATE
+        SET station_name = EXCLUDED.station_name,
+            city = EXCLUDED.city,
+            district = EXCLUDED.district,
+            geographic_location = EXCLUDED.geographic_location,
+            station_type_code = EXCLUDED.station_type_code,
+            station_status_code = EXCLUDED.station_status_code,
+            updated_by = EXCLUDED.updated_by,
+            updated_at = CURRENT_TIMESTAMP`,
+        [
+            stationCode,
+            stationName,
+            project.city || null,
+            project.district || null,
+            project.google_location || null,
+            normalizeProjectStationType(project.department_type),
+            project.project_status || 'Active',
+            userId,
+        ],
+    );
+
+    return stationCode;
+};
+
 export const createOrGetContractDraftFromTask = async (req: Request, res: Response): Promise<void> => {
     try {
         await ensureWorkflowSchema();
@@ -76,10 +151,6 @@ export const createOrGetContractDraftFromTask = async (req: Request, res: Respon
 
         const task = taskResult.rows[0];
 
-        // #region agent log
-        fetch('http://127.0.0.1:7867/ingest/47e85903-0634-434d-b067-59a8a5f4b259',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'32f481'},body:JSON.stringify({sessionId:'32f481',runId:'pre-fix',hypothesisId:'H_meta_missing_or_mismatched',location:'contracts.controller.ts:createOrGetContractDraftFromTask:taskLoaded',message:'Loaded task for contract from-task',data:{taskId:String(taskId),flowType:String(task.flow_type||''),status:String(task.status||''),hasMetadata:Boolean(task.metadata),metadataType:typeof task.metadata,metadataKeys:task.metadata&&typeof task.metadata==='object'?Object.keys(task.metadata).slice(0,20):[],hasInvestmentProjectId:Boolean(task.investment_project_id)},timestamp:Date.now()})}).catch(()=>{});
-        // #endregion agent log
-
         const isAssignee = task.assigned_to && String(task.assigned_to) === String(userId);
         const canAccess = userRole === 'super_admin' || isAssignee;
         if (!canAccess) {
@@ -95,18 +166,15 @@ export const createOrGetContractDraftFromTask = async (req: Request, res: Respon
         const metadata = (task.metadata || {}) as Record<string, any>;
         let stationCode = String(metadata.stationCode || metadata.station_code || metadata.stationcode || '').trim();
 
-        // #region agent log
-        fetch('http://127.0.0.1:7867/ingest/47e85903-0634-434d-b067-59a8a5f4b259',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'32f481'},body:JSON.stringify({sessionId:'32f481',runId:'pre-fix',hypothesisId:'H_stationCode_source',location:'contracts.controller.ts:createOrGetContractDraftFromTask:stationCodeExtract',message:'Extracted stationCode from task metadata',data:{taskId:String(taskId),stationCodePresent:Boolean(stationCode),stationCodeLength:stationCode?stationCode.length:0,stationCodeKeyHit:metadata.stationCode?'stationCode':(metadata.station_code?'station_code':(metadata.stationcode?'stationcode':''))},timestamp:Date.now()})}).catch(()=>{});
-        // #endregion agent log
-
-        if (!stationCode && task.investment_project_id) {
+        let projectCode = '';
+        if (task.investment_project_id) {
             const projectResult = await pool.query(
                 'SELECT project_code FROM investment_projects WHERE id = $1 LIMIT 1',
                 [task.investment_project_id],
             );
-            const derived = String(projectResult.rows[0]?.project_code || '').trim();
-            if (derived) {
-                stationCode = derived;
+            projectCode = String(projectResult.rows[0]?.project_code || '').trim();
+            if (!stationCode && projectCode) {
+                stationCode = projectCode;
                 await pool.query(
                     `UPDATE project_workflow_tasks
                      SET metadata = jsonb_set(COALESCE(metadata, '{}'::jsonb), '{stationCode}', to_jsonb($1::text), true),
@@ -122,6 +190,20 @@ export const createOrGetContractDraftFromTask = async (req: Request, res: Respon
             return;
         }
 
+        let hasStation = await stationExists(stationCode);
+        if (!hasStation && task.investment_project_id && projectCode && stationCode === projectCode) {
+            await upsertStationFromProjectForContract(task.investment_project_id, userId);
+            hasStation = await stationExists(stationCode);
+        }
+
+        if (!hasStation) {
+            res.status(409).json({
+                error: `Station code ${stationCode} does not exist in station_information.`,
+                details: 'Ensure station exists before starting contract task.',
+            });
+            return;
+        }
+
         const existingContractId = String(metadata.contractId || metadata.contract_id || '').trim();
         if (existingContractId) {
             const existingContract = await pool.query(
@@ -132,6 +214,19 @@ export const createOrGetContractDraftFromTask = async (req: Request, res: Respon
                 res.status(200).json({ data: existingContract.rows[0] });
                 return;
             }
+        }
+
+        const existingTaskDraft = await pool.query(
+            `SELECT *
+             FROM contracts
+             WHERE workflow_task_id = $1
+             ORDER BY created_at DESC
+             LIMIT 1`,
+            [taskId],
+        );
+        if (existingTaskDraft.rows.length) {
+            res.status(200).json({ data: existingTaskDraft.rows[0] });
+            return;
         }
 
         // Create a new draft contract row bound to the task.
@@ -178,6 +273,13 @@ export const createOrGetContractDraftFromTask = async (req: Request, res: Respon
         res.status(201).json({ data: contract });
     } catch (error: any) {
         console.error('Error creating contract draft from task:', error);
+        if (error?.code === '23503') {
+            res.status(409).json({
+                error: 'Contract task could not start because station_code is missing in station_information.',
+                details: error.message,
+            });
+            return;
+        }
         res.status(500).json({ error: 'Failed to start contract task', details: error.message });
     }
 };
@@ -271,6 +373,10 @@ export const createContract = async (req: Request, res: Response): Promise<void>
         });
     } catch (error: any) {
         console.error('Error creating contract:', error);
+        if (error.code === '23503') {
+            res.status(400).json({ error: 'Invalid station code. The station does not exist in station_information.' });
+            return;
+        }
         if (error.code === '23505') {
             res.status(409).json({ error: 'Contract No already exists' });
             return;
@@ -363,6 +469,10 @@ export const updateContract = async (req: Request, res: Response): Promise<void>
         res.status(200).json({ message: 'Contract updated successfully', data: result.rows[0] });
     } catch (error: any) {
         console.error('Error updating contract:', error);
+        if (error.code === '23503') {
+            res.status(400).json({ error: 'Invalid station code. The station does not exist in station_information.' });
+            return;
+        }
         res.status(500).json({
             error: 'Failed to update contract',
             details: error.message

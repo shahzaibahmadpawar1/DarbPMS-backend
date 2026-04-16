@@ -102,6 +102,17 @@ export const createContractRequestTask = async (req: AuthRequest, res: Response)
             return;
         }
 
+        const stationLookup = await pool.query(
+            'SELECT station_code FROM station_information WHERE station_code = $1 LIMIT 1',
+            [resolvedStationCode],
+        );
+        if (!stationLookup.rows.length) {
+            res.status(400).json({
+                error: `Station ${resolvedStationCode} does not exist. Create station information first.`,
+            });
+            return;
+        }
+
         const inserted = await pool.query(
             `INSERT INTO project_workflow_tasks (
                 investment_project_id,
@@ -984,6 +995,11 @@ export const reviewWorkflowTask = async (req: AuthRequest, res: Response): Promi
                 return;
             }
 
+            if (!task.investment_project_id) {
+                res.status(409).json({ error: 'Project-linked task is required for contract/document routing' });
+                return;
+            }
+
             const assignee = await pool.query('SELECT id, role, department FROM users WHERE id = $1 LIMIT 1', [assignedToUserId]);
             if (!assignee.rows.length) {
                 res.status(404).json({ error: 'Assignee not found' });
@@ -1010,6 +1026,22 @@ export const reviewWorkflowTask = async (req: AuthRequest, res: Response): Promi
                 (await pool.query('SELECT project_code FROM investment_projects WHERE id = $1 LIMIT 1', [task.investment_project_id]))
                     .rows[0]?.project_code || ''
             ).trim();
+
+            if (!stationCodeFromProject) {
+                res.status(409).json({ error: 'Unable to resolve station code from project before routing.' });
+                return;
+            }
+
+            await upsertStationFromProject(task.investment_project_id, userId);
+
+            const stationExists = await pool.query(
+                'SELECT 1 FROM station_information WHERE station_code = $1 LIMIT 1',
+                [stationCodeFromProject],
+            );
+            if (!stationExists.rows.length) {
+                res.status(409).json({ error: `Station ${stationCodeFromProject} does not exist after routing preparation.` });
+                return;
+            }
 
             const updatedTask = await pool.query(`
                 UPDATE project_workflow_tasks
