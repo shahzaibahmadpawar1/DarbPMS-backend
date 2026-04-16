@@ -1189,10 +1189,16 @@ export const reviewWorkflowTask = async (req: AuthRequest, res: Response): Promi
                 return;
             }
 
-            const stationCodeFromProject = String(
-                (await pool.query('SELECT project_code FROM investment_projects WHERE id = $1 LIMIT 1', [task.investment_project_id]))
-                    .rows[0]?.project_code || ''
-            ).trim();
+            const projectResult = await pool.query(
+                `SELECT project_code, project_name, city, district, google_location, contract_type,
+                        owner_name, owner_contact_no, id_no, national_address, email, owner_type, order_date
+                 FROM investment_projects
+                 WHERE id = $1
+                 LIMIT 1`,
+                [task.investment_project_id],
+            );
+            const project = projectResult.rows[0] || {};
+            const stationCodeFromProject = String(project.project_code || '').trim();
 
             if (!stationCodeFromProject) {
                 res.status(409).json({ error: 'Unable to resolve station code from project before routing.' });
@@ -1218,7 +1224,10 @@ export const reviewWorkflowTask = async (req: AuthRequest, res: Response): Promi
                     assigned_by = $3,
                     target_department = $4,
                     super_admin_comment = $5,
-                    metadata = jsonb_set(COALESCE(metadata, '{}'::jsonb), '{stationCode}', to_jsonb($7::text), true),
+                    metadata = COALESCE(metadata, '{}'::jsonb) || jsonb_build_object(
+                        'stationCode', to_jsonb($7::text),
+                        'contractDefaults', $8::jsonb
+                    ),
                     updated_at = CURRENT_TIMESTAMP
                 WHERE id = $6
                 RETURNING *
@@ -1230,6 +1239,18 @@ export const reviewWorkflowTask = async (req: AuthRequest, res: Response): Promi
                 comment || null,
                 id,
                 stationCodeFromProject,
+                JSON.stringify({
+                    contractType: String(project.contract_type || '').trim() || null,
+                    contractSignatureLocation: String(project.google_location || project.city || project.project_name || '').trim() || null,
+                    contractSignatureDate: project.order_date ? String(project.order_date).slice(0, 10) : null,
+                    lessorName: String(project.owner_name || '').trim() || null,
+                    idNo: String(project.id_no || '').trim() || null,
+                    mobileNo: String(project.owner_contact_no || '').trim() || null,
+                    email: String(project.email || '').trim() || null,
+                    tenantName: String(project.project_name || '').trim() || null,
+                    tenantMobileNo: String(project.owner_contact_no || '').trim() || null,
+                    tenantEmail: String(project.email || '').trim() || null,
+                }),
             ]);
 
             await pool.query(`
@@ -1253,6 +1274,18 @@ export const reviewWorkflowTask = async (req: AuthRequest, res: Response): Promi
                     branch: normalizedBranch,
                     assignedToUserId,
                     targetDepartment: resolvedTargetDepartment,
+                    contractDefaults: {
+                        contractType: String(project.contract_type || '').trim() || null,
+                        contractSignatureLocation: String(project.google_location || project.city || project.project_name || '').trim() || null,
+                        contractSignatureDate: project.order_date ? String(project.order_date).slice(0, 10) : null,
+                        lessorName: String(project.owner_name || '').trim() || null,
+                        idNo: String(project.id_no || '').trim() || null,
+                        mobileNo: String(project.owner_contact_no || '').trim() || null,
+                        email: String(project.email || '').trim() || null,
+                        tenantName: String(project.project_name || '').trim() || null,
+                        tenantMobileNo: String(project.owner_contact_no || '').trim() || null,
+                        tenantEmail: String(project.email || '').trim() || null,
+                    },
                 },
             });
 

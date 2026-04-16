@@ -131,6 +131,204 @@ const firstNonEmpty = (...values: Array<string | null | undefined>): string => {
     return '';
 };
 
+type ContractBootstrapDefaults = {
+    contractType?: string | null;
+    contractSignatureDate?: string | null;
+    contractSignatureLocation?: string | null;
+    tenancyStartDate?: string | null;
+    tenancyEndDate?: string | null;
+    lessorName?: string | null;
+    nationality?: string | null;
+    idType?: string | null;
+    idNo?: string | null;
+    mobileNo?: string | null;
+    email?: string | null;
+    tenantName?: string | null;
+    tenantNationality?: string | null;
+    tenantIdType?: string | null;
+    tenantIdNo?: string | null;
+    tenantMobileNo?: string | null;
+    tenantEmail?: string | null;
+    duePeriod?: string | null;
+};
+
+const normalizeBootstrapText = (value: unknown): string | null => {
+    const normalized = String(value || '').trim();
+    return normalized || null;
+};
+
+const toIsoDate = (value: unknown): string | null => {
+    if (!value) return null;
+    return String(value).slice(0, 10) || null;
+};
+
+const hydrateContractDraftRow = async (contractId: string, defaults: ContractBootstrapDefaults): Promise<any> => {
+    const contractType = normalizeBootstrapText(defaults.contractType);
+    const contractSignatureDate = toIsoDate(defaults.contractSignatureDate);
+    const contractSignatureLocation = normalizeBootstrapText(defaults.contractSignatureLocation);
+    const tenancyStartDate = toIsoDate(defaults.tenancyStartDate);
+    const tenancyEndDate = toIsoDate(defaults.tenancyEndDate);
+    const lessorName = normalizeBootstrapText(defaults.lessorName);
+    const nationality = normalizeBootstrapText(defaults.nationality);
+    const idType = normalizeBootstrapText(defaults.idType);
+    const idNo = normalizeBootstrapText(defaults.idNo);
+    const mobileNo = normalizeBootstrapText(defaults.mobileNo);
+    const email = normalizeBootstrapText(defaults.email);
+    const tenantName = normalizeBootstrapText(defaults.tenantName);
+    const tenantNationality = normalizeBootstrapText(defaults.tenantNationality);
+    const tenantIdType = normalizeBootstrapText(defaults.tenantIdType);
+    const tenantIdNo = normalizeBootstrapText(defaults.tenantIdNo);
+    const tenantMobileNo = normalizeBootstrapText(defaults.tenantMobileNo);
+    const tenantEmail = normalizeBootstrapText(defaults.tenantEmail);
+    const duePeriod = normalizeBootstrapText(defaults.duePeriod);
+
+    const hydrated = await pool.query(
+        `UPDATE contracts
+         SET contract_type = CASE WHEN NULLIF(contract_type, '') IS NULL AND $1 IS NOT NULL THEN $1 ELSE contract_type END,
+             contract_signature_date = CASE WHEN contract_signature_date IS NULL AND $2::date IS NOT NULL THEN $2::date ELSE contract_signature_date END,
+             contract_signature_location = CASE WHEN NULLIF(contract_signature_location, '') IS NULL AND $3 IS NOT NULL THEN $3 ELSE contract_signature_location END,
+             tenancy_start_date = CASE WHEN tenancy_start_date IS NULL AND $4::date IS NOT NULL THEN $4::date ELSE tenancy_start_date END,
+             tenancy_end_date = CASE WHEN tenancy_end_date IS NULL AND $5::date IS NOT NULL THEN $5::date ELSE tenancy_end_date END,
+             lessor_name = CASE WHEN NULLIF(lessor_name, '') IS NULL AND $6 IS NOT NULL THEN $6 ELSE lessor_name END,
+             nationality = CASE WHEN NULLIF(nationality, '') IS NULL AND $7 IS NOT NULL THEN $7 ELSE nationality END,
+             id_type = CASE WHEN NULLIF(id_type, '') IS NULL AND $8 IS NOT NULL THEN $8 ELSE id_type END,
+             id_no = CASE WHEN NULLIF(id_no, '') IS NULL AND $9 IS NOT NULL THEN $9 ELSE id_no END,
+             mobile_no = CASE WHEN NULLIF(mobile_no, '') IS NULL AND $10 IS NOT NULL THEN $10 ELSE mobile_no END,
+             email = CASE WHEN NULLIF(email, '') IS NULL AND $11 IS NOT NULL THEN $11 ELSE email END,
+             tenant_name = CASE WHEN NULLIF(tenant_name, '') IS NULL AND $12 IS NOT NULL THEN $12 ELSE tenant_name END,
+             tenant_nationality = CASE WHEN NULLIF(tenant_nationality, '') IS NULL AND $13 IS NOT NULL THEN $13 ELSE tenant_nationality END,
+             tenant_id_type = CASE WHEN NULLIF(tenant_id_type, '') IS NULL AND $14 IS NOT NULL THEN $14 ELSE tenant_id_type END,
+             tenant_id_no = CASE WHEN NULLIF(tenant_id_no, '') IS NULL AND $15 IS NOT NULL THEN $15 ELSE tenant_id_no END,
+             tenant_mobile_no = CASE WHEN NULLIF(tenant_mobile_no, '') IS NULL AND $16 IS NOT NULL THEN $16 ELSE tenant_mobile_no END,
+             tenant_email = CASE WHEN NULLIF(tenant_email, '') IS NULL AND $17 IS NOT NULL THEN $17 ELSE tenant_email END,
+             due_period = CASE WHEN NULLIF(due_period, '') IS NULL AND $18 IS NOT NULL THEN $18 ELSE due_period END,
+             updated_at = CURRENT_TIMESTAMP
+         WHERE id = $19
+         RETURNING *`,
+        [
+            contractType,
+            contractSignatureDate,
+            contractSignatureLocation,
+            tenancyStartDate,
+            tenancyEndDate,
+            lessorName,
+            nationality,
+            idType,
+            idNo,
+            mobileNo,
+            email,
+            tenantName,
+            tenantNationality,
+            tenantIdType,
+            tenantIdNo,
+            tenantMobileNo,
+            tenantEmail,
+            duePeriod,
+            contractId,
+        ],
+    );
+
+    return hydrated.rows[0];
+};
+
+const buildContractBootstrapDefaults = async (task: any, stationCode: string): Promise<ContractBootstrapDefaults> => {
+    const metadata = task?.metadata && typeof task.metadata === 'object' ? task.metadata as Record<string, any> : {};
+    const storedDefaults = metadata.contractDefaults && typeof metadata.contractDefaults === 'object'
+        ? metadata.contractDefaults as Record<string, any>
+        : {};
+
+    const [projectResult, stationResult, ownerResult, deedResult] = await Promise.all([
+        task.investment_project_id
+            ? pool.query(
+                `SELECT project_code, project_name, city, district, google_location, contract_type,
+                        owner_name, owner_contact_no, id_no, national_address, email, owner_type, order_date
+                 FROM investment_projects
+                 WHERE id = $1
+                 LIMIT 1`,
+                [task.investment_project_id],
+            )
+            : Promise.resolve({ rows: [] } as any),
+        pool.query(
+            `SELECT station_name, city, district, geographic_location, station_type_code
+             FROM station_information
+             WHERE station_code = $1
+             LIMIT 1`,
+            [stationCode],
+        ),
+        pool.query(
+            `SELECT owner_id, owner_name, issue_date, issue_place, owner_mobile, owner_email
+             FROM owners
+             WHERE station_code = $1
+             ORDER BY created_at DESC
+             LIMIT 1`,
+            [stationCode],
+        ),
+        pool.query(
+            `SELECT deed_date, deed_issue_by, nationality, id_type, id_date, city, district, address
+             FROM deeds
+             WHERE station_code = $1
+             ORDER BY created_at DESC
+             LIMIT 1`,
+            [stationCode],
+        ),
+    ]);
+
+    const project = projectResult.rows[0] || {};
+    const station = stationResult.rows[0] || {};
+    const owner = ownerResult.rows[0] || {};
+    const deed = deedResult.rows[0] || {};
+
+    return {
+        contractType: normalizeBootstrapText(storedDefaults.contractType) || normalizeBootstrapText(project.contract_type) || normalizeBootstrapText(station.station_type_code),
+        contractSignatureDate: normalizeBootstrapText(storedDefaults.contractSignatureDate) || toIsoDate(project.order_date) || toIsoDate(owner.issue_date) || toIsoDate(deed.deed_date),
+        contractSignatureLocation: normalizeBootstrapText(storedDefaults.contractSignatureLocation)
+            || normalizeBootstrapText(project.google_location)
+            || normalizeBootstrapText(owner.issue_place)
+            || normalizeBootstrapText(station.station_name)
+            || normalizeBootstrapText(station.city)
+            || normalizeBootstrapText(project.project_name),
+        tenancyStartDate: normalizeBootstrapText(storedDefaults.tenancyStartDate) || toIsoDate(project.order_date) || toIsoDate(deed.deed_date),
+        tenancyEndDate: normalizeBootstrapText(storedDefaults.tenancyEndDate),
+        lessorName: normalizeBootstrapText(storedDefaults.lessorName)
+            || normalizeBootstrapText(owner.owner_name)
+            || normalizeBootstrapText(project.owner_name)
+            || normalizeBootstrapText(station.station_name),
+        nationality: normalizeBootstrapText(storedDefaults.nationality)
+            || normalizeBootstrapText(deed.nationality)
+            || normalizeBootstrapText(project.owner_type),
+        idType: normalizeBootstrapText(storedDefaults.idType)
+            || normalizeBootstrapText(deed.id_type)
+            || (normalizeBootstrapText(project.owner_type) === 'company' ? 'Commercial Registration' : 'National ID'),
+        idNo: normalizeBootstrapText(storedDefaults.idNo)
+            || normalizeBootstrapText(owner.owner_id)
+            || normalizeBootstrapText(project.id_no),
+        mobileNo: normalizeBootstrapText(storedDefaults.mobileNo)
+            || normalizeBootstrapText(owner.owner_mobile)
+            || normalizeBootstrapText(project.owner_contact_no),
+        email: normalizeBootstrapText(storedDefaults.email)
+            || normalizeBootstrapText(owner.owner_email)
+            || normalizeBootstrapText(project.email),
+        tenantName: normalizeBootstrapText(storedDefaults.tenantName)
+            || normalizeBootstrapText(project.project_name)
+            || normalizeBootstrapText(station.station_name),
+        tenantNationality: normalizeBootstrapText(storedDefaults.tenantNationality)
+            || normalizeBootstrapText(project.owner_type)
+            || normalizeBootstrapText(deed.nationality),
+        tenantIdType: normalizeBootstrapText(storedDefaults.tenantIdType)
+            || normalizeBootstrapText(project.owner_type),
+        tenantIdNo: normalizeBootstrapText(storedDefaults.tenantIdNo)
+            || normalizeBootstrapText(project.project_code)
+            || normalizeBootstrapText(stationCode),
+        tenantMobileNo: normalizeBootstrapText(storedDefaults.tenantMobileNo)
+            || normalizeBootstrapText(project.owner_contact_no)
+            || normalizeBootstrapText(owner.owner_mobile),
+        tenantEmail: normalizeBootstrapText(storedDefaults.tenantEmail)
+            || normalizeBootstrapText(project.email)
+            || normalizeBootstrapText(owner.owner_email),
+        duePeriod: normalizeBootstrapText(storedDefaults.duePeriod),
+    };
+};
+
 const syncOwnershipAndLegalFromContract = async (contract: any, userId: string): Promise<void> => {
     const stationCode = String(contract.station_code || '').trim();
     if (!stationCode) {
@@ -395,6 +593,8 @@ export const createOrGetContractDraftFromTask = async (req: Request, res: Respon
             return;
         }
 
+        const contractDefaults = await buildContractBootstrapDefaults(task, stationCode);
+
         const existingContractId = String(metadata.contractId || metadata.contract_id || '').trim();
         if (existingContractId) {
             const existingContract = await pool.query(
@@ -402,7 +602,8 @@ export const createOrGetContractDraftFromTask = async (req: Request, res: Respon
                 [existingContractId],
             );
             if (existingContract.rows.length) {
-                res.status(200).json({ data: existingContract.rows[0] });
+                const hydratedContract = await hydrateContractDraftRow(existingContract.rows[0].id, contractDefaults);
+                res.status(200).json({ data: hydratedContract });
                 return;
             }
         }
@@ -417,7 +618,8 @@ export const createOrGetContractDraftFromTask = async (req: Request, res: Respon
                 [taskId],
             );
             if (previewTaskDraft.rows.length) {
-                res.status(200).json({ data: previewTaskDraft.rows[0] });
+                    const hydratedContract = await hydrateContractDraftRow(previewTaskDraft.rows[0].id, contractDefaults);
+                    res.status(200).json({ data: hydratedContract });
                 return;
             }
 
@@ -434,7 +636,8 @@ export const createOrGetContractDraftFromTask = async (req: Request, res: Respon
             [taskId],
         );
         if (existingTaskDraft.rows.length) {
-            res.status(200).json({ data: existingTaskDraft.rows[0] });
+            const hydratedContract = await hydrateContractDraftRow(existingTaskDraft.rows[0].id, contractDefaults);
+            res.status(200).json({ data: hydratedContract });
             return;
         }
 
@@ -457,6 +660,7 @@ export const createOrGetContractDraftFromTask = async (req: Request, res: Respon
         );
 
         const contract = insert.rows[0];
+        const hydratedContract = await hydrateContractDraftRow(contract.id, contractDefaults);
 
         await pool.query(
             `UPDATE project_workflow_tasks
@@ -479,7 +683,7 @@ export const createOrGetContractDraftFromTask = async (req: Request, res: Respon
             },
         });
 
-        res.status(201).json({ data: contract });
+        res.status(201).json({ data: hydratedContract });
     } catch (error: any) {
         console.error('Error creating contract draft from task:', error);
         if (error?.code === '23503') {
