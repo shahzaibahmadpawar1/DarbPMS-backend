@@ -521,6 +521,50 @@ export const updateContract = async (req: Request, res: Response): Promise<void>
             res.status(404).json({ error: 'Contract not found' });
             return;
         }
+
+        const updatedContract = result.rows[0];
+
+        if (shouldSubmit && updatedContract.workflow_task_id) {
+            await ensureWorkflowSchema();
+
+            const workflowTaskId = String(updatedContract.workflow_task_id);
+            const taskLookup = await pool.query(
+                `SELECT status
+                 FROM project_workflow_tasks
+                 WHERE id = $1
+                 LIMIT 1`,
+                [workflowTaskId],
+            );
+
+            const oldTaskState = String(taskLookup.rows[0]?.status || '').trim() || null;
+            const contractAttachmentUrl = String(updatedContract.contract_attachment_url || '').trim();
+
+            await pool.query(
+                `UPDATE project_workflow_tasks
+                 SET status = 'under_super_admin_review',
+                     manager_attachment_url = CASE WHEN $1 <> '' THEN $1 ELSE manager_attachment_url END,
+                     attachment_url = CASE WHEN $1 <> '' THEN $1 ELSE attachment_url END,
+                     manager_note = COALESCE(manager_note, 'Contract submitted from form and sent for Super Admin review'),
+                     updated_at = CURRENT_TIMESTAMP
+                 WHERE id = $2`,
+                [contractAttachmentUrl, workflowTaskId],
+            );
+
+            await recordWorkflowTransition({
+                entityType: 'workflow_task',
+                entityId: workflowTaskId,
+                oldState: oldTaskState,
+                newState: 'under_super_admin_review',
+                changedBy: userId,
+                note: 'Contract submitted from form and sent to Super Admin review',
+                metadata: {
+                    contractId: updatedContract.id,
+                    stationCode: updatedContract.station_code,
+                    hasAttachment: Boolean(contractAttachmentUrl),
+                },
+            });
+        }
+
         res.status(200).json({ message: 'Contract updated successfully', data: result.rows[0] });
     } catch (error: any) {
         console.error('Error updating contract:', error);
