@@ -270,7 +270,7 @@ export const recordWorkflowTransition = async (params: {
         metadata = {},
     } = params;
 
-    await pool.query(`
+    const insertSql = `
         INSERT INTO workflow_transition_audit (
             entity_type,
             entity_id,
@@ -280,5 +280,22 @@ export const recordWorkflowTransition = async (params: {
             note,
             metadata
         ) VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb)
-    `, [entityType, entityId, oldState, newState, changedBy, note, JSON.stringify(metadata)]);
+    `;
+    const serializedMetadata = JSON.stringify(metadata);
+
+    try {
+        await pool.query(insertSql, [entityType, entityId, oldState, newState, changedBy, note, serializedMetadata]);
+    } catch (error: any) {
+        const message = String(error?.message || '').toLowerCase();
+        const isChangedByFkViolation =
+            error?.code === '23503' &&
+            (message.includes('workflow_transition_audit_changed_by_fkey') || message.includes('changed_by'));
+
+        if (changedBy && isChangedByFkViolation) {
+            await pool.query(insertSql, [entityType, entityId, oldState, newState, null, note, serializedMetadata]);
+            return;
+        }
+
+        throw error;
+    }
 };
