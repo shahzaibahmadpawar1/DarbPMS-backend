@@ -9,12 +9,31 @@ import {
     reviewContract,
     updateContract,
 } from '../controllers/contracts.controller';
-import { authenticateToken, requireCapability, requireDepartmentAccessByLookup, requireStationDepartmentAccess, requireSuperAdmin } from '../middleware/auth';
+import {
+    authenticateToken,
+    requireCapability,
+    requireContractTaskOrDepartmentAccessByLookup,
+    requireDepartmentAccessByLookup,
+    requireStationDepartmentAccess,
+    requireSuperAdmin
+} from '../middleware/auth';
 
 const contractDepartmentLookup = `
     SELECT (CASE WHEN lower(si.station_type_code) = 'frenchise' THEN 'franchise' ELSE lower(si.station_type_code) END) AS department
     FROM contracts c
     INNER JOIN station_information si ON si.station_code = c.station_code
+    WHERE c.id = $1
+    LIMIT 1
+`;
+
+const contractTaskOrDepartmentLookup = `
+    SELECT
+        (CASE WHEN lower(si.station_type_code) = 'frenchise' THEN 'franchise' ELSE lower(si.station_type_code) END) AS department,
+        t.assigned_to::text AS assigned_to,
+        c.created_by::text AS created_by
+    FROM contracts c
+    INNER JOIN station_information si ON si.station_code = c.station_code
+    LEFT JOIN project_workflow_tasks t ON t.id = c.workflow_task_id
     WHERE c.id = $1
     LIMIT 1
 `;
@@ -28,7 +47,7 @@ router.post('/from-task/:taskId', requireCapability('view'), createOrGetContract
 router.get('/', requireCapability('view'), getAllContracts);
 router.get('/latest-saved', requireCapability('view'), getLatestSavedContract);
 router.get('/station/:stationCode', requireCapability('view'), requireStationDepartmentAccess({ paramField: 'stationCode' }), getContractsByStation);
-router.put('/:id', requireCapability('edit'), requireDepartmentAccessByLookup(contractDepartmentLookup, 'id'), updateContract);
+router.put('/:id', requireCapability('edit'), requireContractTaskOrDepartmentAccessByLookup(contractTaskOrDepartmentLookup, 'id'), updateContract);
 router.patch('/:id/review', requireSuperAdmin, reviewContract);
 router.delete('/:id', requireCapability('delete'), requireDepartmentAccessByLookup(contractDepartmentLookup, 'id'), deleteContract);
 

@@ -365,3 +365,55 @@ export const requireDepartmentAccessByLookup = (lookupQuery: string, idParam = '
         }
     };
 };
+
+export const requireContractTaskOrDepartmentAccessByLookup = (lookupQuery: string, idParam = 'id') => {
+    return async (req: AuthRequest, res: Response, next: NextFunction): Promise<void> => {
+        try {
+            const hydrated = await hydrateUserFromDb(req);
+            if (!hydrated || !req.user) {
+                res.status(401).json({ success: false, message: 'User not found' });
+                return;
+            }
+
+            if (req.user.role === 'super_admin') {
+                next();
+                return;
+            }
+
+            const identifier = (req.params as any)?.[idParam];
+            if (!identifier) {
+                res.status(400).json({ success: false, message: 'Resource identifier is required' });
+                return;
+            }
+
+            const result = await pool.query(lookupQuery, [identifier]);
+            if (!result.rows.length) {
+                res.status(404).json({ success: false, message: 'Resource not found' });
+                return;
+            }
+
+            const row = result.rows[0] as {
+                department?: string | null;
+                assigned_to?: string | null;
+                created_by?: string | null;
+            };
+
+            const assignedTo = String(row.assigned_to || '').trim();
+            const createdBy = String(row.created_by || '').trim();
+            if ((assignedTo && assignedTo === req.user.id) || (createdBy && createdBy === req.user.id)) {
+                next();
+                return;
+            }
+
+            const resourceDepartment = normalizeDepartment(row.department);
+            if (!resourceDepartment || resourceDepartment !== req.user.department) {
+                res.status(403).json({ success: false, message: 'Cross-department access is not allowed' });
+                return;
+            }
+
+            next();
+        } catch {
+            res.status(500).json({ success: false, message: 'Internal server error' });
+        }
+    };
+};
