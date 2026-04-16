@@ -433,7 +433,31 @@ export const updateContract = async (req: Request, res: Response): Promise<void>
         const submit = reqBody?.submit;
         const shouldSubmit = submit === true || submit === 'true';
 
-        const fields = Object.entries(reqBody).filter(([k, v]) => k !== 'submit' && v !== undefined);
+        const protectedFields = new Set([
+            'submit',
+            'reviewStatus',
+            'review_status',
+            'isSubmitted',
+            'is_submitted',
+            'submittedAt',
+            'submitted_at',
+            'submittedBy',
+            'submitted_by',
+            'lastSavedAt',
+            'last_saved_at',
+            'lastSavedBy',
+            'last_saved_by',
+            'updatedAt',
+            'updated_at',
+            'updatedBy',
+            'updated_by',
+            'createdAt',
+            'created_at',
+            'createdBy',
+            'created_by',
+        ]);
+
+        const fields = Object.entries(reqBody).filter(([k, v]) => !protectedFields.has(k) && v !== undefined);
         if (fields.length === 0) {
             res.status(400).json({ error: 'No fields to update' });
             return;
