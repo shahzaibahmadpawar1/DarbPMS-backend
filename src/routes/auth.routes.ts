@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { AuthController } from '../controllers/auth.controller';
-import { authenticateToken, requireSuperAdmin } from '../middleware/auth';
+import { authenticateToken, requireExecutiveAccess, requireSuperAdmin } from '../middleware/auth';
 
 const router = Router();
 
@@ -12,7 +12,7 @@ router.post('/login', AuthController.login);
 router.get('/profile', authenticateToken, AuthController.getProfile);
 
 // Super-admin-only routes
-router.get('/users', authenticateToken, requireSuperAdmin, AuthController.getAllUsers);
+router.get('/users', authenticateToken, requireExecutiveAccess, AuthController.getAllUsers);
 router.post('/users', authenticateToken, requireSuperAdmin, AuthController.createUser);
 router.patch('/users/:id', authenticateToken, requireSuperAdmin, AuthController.updateUser);
 router.patch('/users/:id/status', authenticateToken, requireSuperAdmin, AuthController.updateUserStatus);

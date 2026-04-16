@@ -47,11 +47,15 @@ export const submitCeoContact = async (req: AuthRequest, res: Response): Promise
         }
 
         const reviewer = await pool.query(
+            `SELECT id FROM users WHERE role = 'ceo' ORDER BY created_at ASC LIMIT 1`,
+        );
+
+        const fallbackReviewer = reviewer.rows.length ? reviewer : await pool.query(
             `SELECT id FROM users WHERE role = 'super_admin' ORDER BY created_at ASC LIMIT 1`,
         );
 
-        if (!reviewer.rows.length) {
-            res.status(404).json({ error: 'No super admin found to receive this message' });
+        if (!fallbackReviewer.rows.length) {
+            res.status(404).json({ error: 'No CEO or super admin found to receive this message' });
             return;
         }
 
@@ -103,7 +107,7 @@ export const submitCeoContact = async (req: AuthRequest, res: Response): Promise
             [
                 `CEO Contact - ${trimmedSubject}`,
                 trimmedDescription,
-                reviewer.rows[0].id,
+                fallbackReviewer.rows[0].id,
                 userId,
                 JSON.stringify(metadata),
             ],
@@ -115,7 +119,7 @@ export const submitCeoContact = async (req: AuthRequest, res: Response): Promise
             oldState: null,
             newState: 'assigned',
             changedBy: userId,
-            note: 'CEO contact submitted for super admin review',
+            note: 'CEO contact submitted for executive review',
             metadata: {
                 taskType: 'ceo_contact',
                 requesterId: userId,

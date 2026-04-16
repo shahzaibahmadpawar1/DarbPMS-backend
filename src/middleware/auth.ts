@@ -9,7 +9,8 @@ const roleRank: Record<UserRole, number> = {
     employee: 1,
     supervisor: 2,
     department_manager: 3,
-    super_admin: 4
+    super_admin: 4,
+    ceo: 1
 };
 
 type Capability = 'view' | 'create' | 'edit' | 'delete' | 'manage_users';
@@ -193,6 +194,29 @@ export const requireSuperAdmin = async (
     }
 };
 
+export const requireExecutiveAccess = async (
+    req: AuthRequest,
+    res: Response,
+    next: NextFunction
+): Promise<void> => {
+    if (!req.user?.id) {
+        res.status(401).json({ success: false, message: 'Authentication required' });
+        return;
+    }
+
+    try {
+        const hydrated = await hydrateUserFromDb(req);
+        if (!hydrated || !req.user || !['super_admin', 'ceo'].includes(req.user.role)) {
+            res.status(403).json({ success: false, message: 'Executive access required' });
+            return;
+        }
+
+        next();
+    } catch {
+        res.status(500).json({ success: false, message: 'Internal server error' });
+    }
+};
+
 export const requireRoleAtLeast = (minimumRole: UserRole) => {
     return async (req: AuthRequest, res: Response, next: NextFunction): Promise<void> => {
         if (!req.user?.id) {
@@ -232,7 +256,7 @@ export const requireDepartmentMatchFromBody = (departmentFieldName = 'department
                 return;
             }
 
-            if (req.user.role === 'super_admin') {
+            if (req.user.role === 'super_admin' || req.user.role === 'ceo') {
                 next();
                 return;
             }
@@ -271,7 +295,7 @@ export const requireStationDepartmentAccess = (
                 return;
             }
 
-            if (req.user.role === 'super_admin') {
+            if (req.user.role === 'super_admin' || req.user.role === 'ceo') {
                 next();
                 return;
             }
@@ -336,7 +360,7 @@ export const requireDepartmentAccessByLookup = (lookupQuery: string, idParam = '
                 return;
             }
 
-            if (req.user.role === 'super_admin') {
+            if (req.user.role === 'super_admin' || req.user.role === 'ceo') {
                 next();
                 return;
             }

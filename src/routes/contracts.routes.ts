@@ -11,11 +11,11 @@ import {
 } from '../controllers/contracts.controller';
 import {
     authenticateToken,
+    requireExecutiveAccess,
     requireCapability,
     requireContractTaskOrDepartmentAccessByLookup,
     requireDepartmentAccessByLookup,
     requireStationDepartmentAccess,
-    requireSuperAdmin
 } from '../middleware/auth';
 
 const contractDepartmentLookup = `
@@ -48,7 +48,7 @@ router.get('/', requireCapability('view'), getAllContracts);
 router.get('/latest-saved', requireCapability('view'), getLatestSavedContract);
 router.get('/station/:stationCode', requireCapability('view'), requireStationDepartmentAccess({ paramField: 'stationCode' }), getContractsByStation);
 router.put('/:id', requireCapability('edit'), requireContractTaskOrDepartmentAccessByLookup(contractTaskOrDepartmentLookup, 'id'), updateContract);
-router.patch('/:id/review', requireSuperAdmin, reviewContract);
+router.patch('/:id/review', requireExecutiveAccess, reviewContract);
 router.delete('/:id', requireCapability('delete'), requireDepartmentAccessByLookup(contractDepartmentLookup, 'id'), deleteContract);
 
 export default router;

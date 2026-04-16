@@ -275,7 +275,7 @@ export const getAllInvestmentProjects = async (req: Request, res: Response): Pro
             limit?: string;
             offset?: string;
         };
-        const effectiveDepartmentType = userRole === 'super_admin'
+        const effectiveDepartmentType = userRole === 'super_admin' || userRole === 'ceo'
             ? departmentType
             : userDepartment;
 
@@ -317,7 +317,7 @@ export const getInvestmentProjectsByStation = async (req: Request, res: Response
             limit?: string;
             offset?: string;
         };
-        const effectiveDepartmentType = userRole === 'super_admin'
+        const effectiveDepartmentType = userRole === 'super_admin' || userRole === 'ceo'
             ? departmentType
             : userDepartment;
 
@@ -459,7 +459,7 @@ export const getLatestSavedInvestmentProject = async (req: Request, res: Respons
         const requestedDepartment = String(req.query?.departmentType || '').trim().toLowerCase();
         const userRole = (req as any).user?.role;
         const userDepartment = (req as any).user?.department;
-        const effectiveDepartmentType = userRole === 'super_admin' ? requestedDepartment : userDepartment;
+        const effectiveDepartmentType = userRole === 'super_admin' || userRole === 'ceo' ? requestedDepartment : userDepartment;
 
         if (!userId || !effectiveDepartmentType) {
             res.status(200).json({ data: null });
@@ -503,7 +503,7 @@ export const getFeasibilityStats = async (req: Request, res: Response): Promise<
         const userRole = (req as any).user?.role;
         const userDepartment = (req as any).user?.department;
         const { departmentType } = req.query;
-        const effectiveDepartmentType = userRole === 'super_admin'
+        const effectiveDepartmentType = userRole === 'super_admin' || userRole === 'ceo'
             ? departmentType
             : userDepartment;
         const filter = effectiveDepartmentType ? 'WHERE department_type = $1' : '';
@@ -529,8 +529,8 @@ export const updateInvestmentProjectReviewStatus = async (req: Request, res: Res
         const userId = (req as any).user?.id;
         const userRole = (req as any).user?.role;
 
-        if (userRole !== 'super_admin') {
-            res.status(403).json({ error: 'Only super admin can apply project review actions from this endpoint' });
+        if (userRole !== 'super_admin' && userRole !== 'ceo') {
+            res.status(403).json({ error: 'Only super admin or CEO can apply project review actions from this endpoint' });
             return;
         }
 
@@ -552,7 +552,7 @@ export const updateInvestmentProjectReviewStatus = async (req: Request, res: Res
             nextReviewStatus = 'Rejected';
         }
 
-        const commentField = userRole === 'super_admin' ? 'ceo_comment' : 'pm_comment';
+        const commentField = userRole === 'super_admin' || userRole === 'ceo' ? 'ceo_comment' : 'pm_comment';
         const updateResult = await pool.query(
             `UPDATE investment_projects
              SET review_status = $1,
@@ -606,7 +606,7 @@ export const getContractStats = async (req: Request, res: Response): Promise<voi
         const userRole = (req as any).user?.role;
         const userDepartment = (req as any).user?.department;
         const { departmentType } = req.query;
-        const effectiveDepartmentType = userRole === 'super_admin'
+        const effectiveDepartmentType = userRole === 'super_admin' || userRole === 'ceo'
             ? departmentType
             : userDepartment;
         const filter = effectiveDepartmentType ? 'WHERE department_type = $1' : '';

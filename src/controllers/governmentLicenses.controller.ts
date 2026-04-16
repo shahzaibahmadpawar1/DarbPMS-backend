@@ -102,7 +102,7 @@ export const getAllSalamahLicenses = async (req: Request, res: Response): Promis
     try {
         const userRole = (req as any).user?.role;
         const userDepartment = (req as any).user?.department;
-        const query = userRole === 'super_admin'
+        const query = userRole === 'super_admin' || userRole === 'ceo'
             ? 'SELECT * FROM salamah_licenses ORDER BY created_at DESC'
             : `
                 SELECT s.* FROM salamah_licenses s
@@ -110,7 +110,7 @@ export const getAllSalamahLicenses = async (req: Request, res: Response): Promis
                 WHERE (CASE WHEN lower(si.station_type_code) = 'frenchise' THEN 'franchise' ELSE lower(si.station_type_code) END) = $1
                 ORDER BY s.created_at DESC
             `;
-        const result = await pool.query(query, userRole === 'super_admin' ? [] : [userDepartment]);
+        const result = await pool.query(query, userRole === 'super_admin' || userRole === 'ceo' ? [] : [userDepartment]);
         res.status(200).json({ message: 'Salamah Licenses retrieved successfully', data: result.rows, count: result.rows.length });
     } catch (error: any) {
         res.status(500).json({ error: 'Failed to fetch Salamah licenses', details: error.message });
@@ -244,7 +244,7 @@ export const getAllTaqyeesLicenses = async (req: Request, res: Response): Promis
     try {
         const userRole = (req as any).user?.role;
         const userDepartment = (req as any).user?.department;
-        const query = userRole === 'super_admin'
+        const query = userRole === 'super_admin' || userRole === 'ceo'
             ? 'SELECT * FROM taqyees_licenses ORDER BY created_at DESC'
             : `
                 SELECT t.* FROM taqyees_licenses t
@@ -252,7 +252,7 @@ export const getAllTaqyeesLicenses = async (req: Request, res: Response): Promis
                 WHERE (CASE WHEN lower(si.station_type_code) = 'frenchise' THEN 'franchise' ELSE lower(si.station_type_code) END) = $1
                 ORDER BY t.created_at DESC
             `;
-        const result = await pool.query(query, userRole === 'super_admin' ? [] : [userDepartment]);
+        const result = await pool.query(query, userRole === 'super_admin' || userRole === 'ceo' ? [] : [userDepartment]);
         res.status(200).json({ message: 'Taqyees Licenses retrieved', data: result.rows, count: result.rows.length });
     } catch (error: any) {
         res.status(500).json({ error: 'Failed to fetch Taqyees licenses', details: error.message });
@@ -399,7 +399,7 @@ export const getAllEnvironmentalLicenses = async (req: Request, res: Response): 
     try {
         const userRole = (req as any).user?.role;
         const userDepartment = (req as any).user?.department;
-        const query = userRole === 'super_admin'
+        const query = userRole === 'super_admin' || userRole === 'ceo'
             ? 'SELECT * FROM environmental_licenses ORDER BY created_at DESC'
             : `
                 SELECT e.* FROM environmental_licenses e
@@ -407,7 +407,7 @@ export const getAllEnvironmentalLicenses = async (req: Request, res: Response): 
                 WHERE (CASE WHEN lower(si.station_type_code) = 'frenchise' THEN 'franchise' ELSE lower(si.station_type_code) END) = $1
                 ORDER BY e.created_at DESC
             `;
-        const result = await pool.query(query, userRole === 'super_admin' ? [] : [userDepartment]);
+        const result = await pool.query(query, userRole === 'super_admin' || userRole === 'ceo' ? [] : [userDepartment]);
         res.status(200).json({ message: 'Environmental Licenses retrieved', data: result.rows, count: result.rows.length });
     } catch (error: any) {
         res.status(500).json({ error: 'Failed to fetch Environmental licenses', details: error.message });

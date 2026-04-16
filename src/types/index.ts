@@ -21,7 +21,7 @@ export type UserType = 'internal' | 'external';
 export type UserStatus = 'active' | 'inactive';
 
 // User roles
-export type UserRole = 'super_admin' | 'department_manager' | 'supervisor' | 'employee';
+export type UserRole = 'super_admin' | 'ceo' | 'department_manager' | 'supervisor' | 'employee';
 
 // User interface matching database schema
 export interface User {

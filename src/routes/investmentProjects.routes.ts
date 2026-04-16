@@ -11,7 +11,7 @@ import {
     getLatestSavedInvestmentProject,
     updateInvestmentProjectReviewStatus,
 } from '../controllers/investmentProjects.controller';
-import { authenticateToken, requireCapability, requireDepartmentAccessByLookup, requireDepartmentMatchFromBody, requireStationDepartmentAccess } from '../middleware/auth';
+import { authenticateToken, requireCapability, requireDepartmentAccessByLookup, requireDepartmentMatchFromBody, requireExecutiveAccess, requireStationDepartmentAccess } from '../middleware/auth';
 
 const investmentProjectDepartmentLookup = `
     SELECT (CASE WHEN lower(department_type) = 'frenchise' THEN 'franchise' ELSE lower(department_type) END) AS department
@@ -32,7 +32,7 @@ router.get('/contract-stats', requireCapability('view'), getContractStats);
 router.get('/latest-saved', requireCapability('view'), getLatestSavedInvestmentProject);
 router.get('/:id', requireCapability('view'), getInvestmentProjectById);
 router.put('/:id', requireCapability('edit'), requireDepartmentAccessByLookup(investmentProjectDepartmentLookup, 'id'), updateInvestmentProject);
-router.patch('/:id/review', requireCapability('edit'), requireDepartmentAccessByLookup(investmentProjectDepartmentLookup, 'id'), updateInvestmentProjectReviewStatus);
+router.patch('/:id/review', requireExecutiveAccess, requireDepartmentAccessByLookup(investmentProjectDepartmentLookup, 'id'), updateInvestmentProjectReviewStatus);
 router.delete('/:id', requireCapability('delete'), requireDepartmentAccessByLookup(investmentProjectDepartmentLookup, 'id'), deleteInvestmentProject);
 
 export default router;

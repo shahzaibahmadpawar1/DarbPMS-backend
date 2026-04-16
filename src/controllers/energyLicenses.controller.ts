@@ -118,7 +118,7 @@ export const getAllEnergyLicenses = async (req: Request, res: Response): Promise
         const userRole = (req as any).user?.role;
         const userDepartment = (req as any).user?.department;
 
-        const query = userRole === 'super_admin'
+        const query = userRole === 'super_admin' || userRole === 'ceo'
             ? 'SELECT * FROM energy_licenses ORDER BY created_at DESC'
             : `
                 SELECT e.* FROM energy_licenses e
@@ -127,7 +127,7 @@ export const getAllEnergyLicenses = async (req: Request, res: Response): Promise
                 ORDER BY e.created_at DESC
             `;
 
-        const result = await pool.query(query, userRole === 'super_admin' ? [] : [userDepartment]);
+        const result = await pool.query(query, userRole === 'super_admin' || userRole === 'ceo' ? [] : [userDepartment]);
         res.status(200).json({ message: 'Energy licenses retrieved successfully', data: result.rows, count: result.rows.length });
     } catch (error: any) {
         console.error('Error fetching energy licenses:', error);

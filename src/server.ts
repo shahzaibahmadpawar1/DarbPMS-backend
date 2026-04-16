@@ -564,7 +564,9 @@ app.get('/api/dashboard/stats', authenticateToken, async (req: Request, res: Res
         const authReq = req as any;
         const userRole = authReq.user?.role;
         const userDepartment = authReq.user?.department;
-        const departmentScoped = userRole !== 'super_admin' ? normalizeDepartment(userDepartment) : normalizeDepartment((req.query as any)?.departmentType);
+        const departmentScoped = (userRole !== 'super_admin' && userRole !== 'ceo')
+            ? normalizeDepartment(userDepartment)
+            : normalizeDepartment((req.query as any)?.departmentType);
         const stationType = normalizeDashboardStationType((req.query as any)?.stationType);
 
         const workflowScopeQuery = buildWorkflowScopeQuery(departmentScoped, stationType);
@@ -749,7 +751,7 @@ app.get('/api/dashboard/activities', authenticateToken, async (req: Request, res
         }
 
         const requestedScope = normalizeActivityScope((req.query as any)?.scope);
-        const scope = userRole === 'super_admin' ? requestedScope : 'mine';
+        const scope = (userRole === 'super_admin' || userRole === 'ceo') ? requestedScope : 'mine';
 
         const limitInput = Number.parseInt(String((req.query as any)?.limit || '20'), 10);
         const offsetInput = Number.parseInt(String((req.query as any)?.offset || '0'), 10);
@@ -820,7 +822,7 @@ app.get('/api/dashboard/stations', authenticateToken, async (req: Request, res: 
         const userDepartment = authReq.user?.department;
         const bucket = normalizeDashboardBucket((req.query as any)?.bucket);
         const stationType = normalizeDashboardStationType((req.query as any)?.stationType);
-        const departmentType = userRole === 'super_admin'
+        const departmentType = (userRole === 'super_admin' || userRole === 'ceo')
             ? normalizeDepartment((req.query as any)?.departmentType)
             : normalizeDepartment(userDepartment);
 

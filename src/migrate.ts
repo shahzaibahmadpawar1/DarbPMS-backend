@@ -14,7 +14,7 @@ async function migrate() {
             await pool.query(`
                 ALTER TABLE users 
                 ADD CONSTRAINT users_role_check 
-                CHECK (role IN ('admin', 'user', 'ceo'));
+                CHECK (role IN ('admin', 'user', 'super_admin', 'ceo', 'department_manager', 'supervisor', 'employee'));
             `);
         } catch (e: any) {
             console.error('Failed at Step 1:', e.message, e);

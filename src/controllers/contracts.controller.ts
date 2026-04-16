@@ -392,7 +392,7 @@ export const getAllContracts = async (req: Request, res: Response): Promise<void
     try {
         const userRole = (req as any).user?.role;
         const userDepartment = (req as any).user?.department;
-        const query = userRole === 'super_admin'
+        const query = userRole === 'super_admin' || userRole === 'ceo'
             ? 'SELECT * FROM contracts ORDER BY created_at DESC'
             : `
                 SELECT c.* FROM contracts c
@@ -400,7 +400,7 @@ export const getAllContracts = async (req: Request, res: Response): Promise<void
                 WHERE (CASE WHEN lower(si.station_type_code) = 'frenchise' THEN 'franchise' ELSE lower(si.station_type_code) END) = $1
                 ORDER BY c.created_at DESC
             `;
-        const result = await pool.query(query, userRole === 'super_admin' ? [] : [userDepartment]);
+        const result = await pool.query(query, userRole === 'super_admin' || userRole === 'ceo' ? [] : [userDepartment]);
         res.status(200).json({ message: 'Contracts retrieved successfully', data: result.rows, count: result.rows.length });
     } catch (error: any) {
         console.error('Error fetching contracts:', error);
@@ -597,8 +597,8 @@ export const reviewContract = async (req: Request, res: Response): Promise<void>
 
         const userId = (req as any).user?.id;
         const userRole = (req as any).user?.role;
-        if (!userId || userRole !== 'super_admin') {
-            res.status(403).json({ error: 'Only super admin can review contracts' });
+        if (!userId || (userRole !== 'super_admin' && userRole !== 'ceo')) {
+            res.status(403).json({ error: 'Only super admin or CEO can review contracts' });
             return;
         }
 

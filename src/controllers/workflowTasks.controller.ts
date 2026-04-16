@@ -297,7 +297,8 @@ export const getWorkflowTasks = async (req: AuthRequest, res: Response): Promise
             LEFT JOIN users acu ON acu.id = t.created_by
         `;
         const params: unknown[] = [];
-        const restrictInvestmentProjectTasks = userRole !== 'super_admin' && normalizeDepartment(userDepartment) !== 'project';
+        const isExecutiveRole = userRole === 'super_admin' || userRole === 'ceo';
+        const restrictInvestmentProjectTasks = !isExecutiveRole && normalizeDepartment(userDepartment) !== 'project';
         const investmentProjectTaskVisibilityClause = restrictInvestmentProjectTasks
             ? `
                 AND NOT (
@@ -307,7 +308,7 @@ export const getWorkflowTasks = async (req: AuthRequest, res: Response): Promise
             `
             : '';
 
-        if (userRole !== 'super_admin') {
+        if (!isExecutiveRole) {
             const department = normalizeDepartment(userDepartment);
             if (!department && userRole === 'department_manager') {
                 throw new Error('Department is required for this action');
@@ -1040,8 +1041,8 @@ export const reviewWorkflowTask = async (req: AuthRequest, res: Response): Promi
                 return;
             }
 
-            if (task.flow_type === 'ceo_contact' && userRole !== 'super_admin') {
-                res.status(403).json({ error: 'Only super admin can review CEO contact tasks' });
+            if (task.flow_type === 'ceo_contact' && userRole !== 'super_admin' && userRole !== 'ceo') {
+                res.status(403).json({ error: 'Only super admin or CEO can review CEO contact tasks' });
                 return;
             }
 
@@ -1050,7 +1051,7 @@ export const reviewWorkflowTask = async (req: AuthRequest, res: Response): Promi
                 return;
             }
 
-            if (userRole !== 'super_admin') {
+            if (userRole !== 'super_admin' && userRole !== 'ceo') {
                 const actorDepartment = normalizeDepartment(req.user?.department);
                 if (!actorDepartment) {
                     res.status(403).json({ error: 'Department is required for this action' });
@@ -1067,7 +1068,7 @@ export const reviewWorkflowTask = async (req: AuthRequest, res: Response): Promi
             const nextStatus = task.flow_type === 'request' && normalizedDecision === 'approved'
                 ? 'pending_requester_decision'
                 : (normalizedDecision as 'approved' | 'rejected');
-            const noteColumn = userRole === 'super_admin' ? 'super_admin_comment' : 'manager_note';
+            const noteColumn = userRole === 'super_admin' || userRole === 'ceo' ? 'super_admin_comment' : 'manager_note';
             const normalizedAttachmentUrl = String((req.body as { attachmentUrl?: string }).attachmentUrl || '').trim();
             if (normalizedAttachmentUrl && !isValidHttpUrl(normalizedAttachmentUrl)) {
                 res.status(400).json({ error: 'attachmentUrl must be a valid http/https URL' });
@@ -1149,8 +1150,8 @@ export const reviewWorkflowTask = async (req: AuthRequest, res: Response): Promi
             return;
         }
 
-        if (userRole !== 'super_admin') {
-            res.status(403).json({ error: 'Only super admin can review workflow tasks' });
+        if (userRole !== 'super_admin' && userRole !== 'ceo') {
+            res.status(403).json({ error: 'Only super admin or CEO can review workflow tasks' });
             return;
         }
 

@@ -282,7 +282,7 @@ export const getAllAreas = async (req: Request, res: Response): Promise<void> =>
         const userRole = (req as any).user?.role;
         const userDepartment = (req as any).user?.department;
 
-        const query = userRole === 'super_admin'
+        const query = userRole === 'super_admin' || userRole === 'ceo'
             ? `
                 SELECT sa.*, 
                 COALESCE(json_agg(cc.*) FILTER (WHERE cc.id IS NOT NULL), '[]') as commercial_components
@@ -302,7 +302,7 @@ export const getAllAreas = async (req: Request, res: Response): Promise<void> =>
                 ORDER BY sa.created_at DESC
             `;
 
-        const result = await pool.query(query, userRole === 'super_admin' ? [] : [userDepartment]);
+        const result = await pool.query(query, userRole === 'super_admin' || userRole === 'ceo' ? [] : [userDepartment]);
         res.status(200).json({ message: 'Areas retrieved successfully', data: result.rows });
     } catch (error) {
         console.error('Error fetching areas:', error);

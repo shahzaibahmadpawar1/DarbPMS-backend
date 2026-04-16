@@ -5,7 +5,7 @@ import { RegisterRequest, LoginRequest, AuthResponse, AuthRequest, Department, U
 import { normalizeUserRole } from '../utils/roles';
 import { recordActivity } from '../utils/activity';
 
-const validRoles: UserRole[] = ['super_admin', 'department_manager', 'supervisor', 'employee'];
+const validRoles: UserRole[] = ['super_admin', 'ceo', 'department_manager', 'supervisor', 'employee'];
 const validDepartments: Department[] = [
     'investment',
     'franchise',
@@ -153,7 +153,7 @@ export class AuthController {
             const userRole: UserRole = validRoles.includes(role as UserRole) ? role : 'employee';
             const department = normalizeDepartment(req.body?.department);
 
-            if (userRole !== 'super_admin' && !department) {
+            if (userRole !== 'super_admin' && userRole !== 'ceo' && !department) {
                 res.status(400).json({
                     success: false,
                     message: 'Department is required for non-super-admin users'
@@ -165,7 +165,7 @@ export class AuthController {
                 username,
                 password,
                 userRole,
-                userRole === 'super_admin' ? null : department,
+                (userRole === 'super_admin' || userRole === 'ceo') ? null : department,
                 null,
                 full_name ? String(full_name).trim() : null,
                 sanitizedEmail,
@@ -418,7 +418,7 @@ export class AuthController {
                     return;
                 }
             } else {
-                if (userRole !== 'super_admin' && !normalizedDepartment) {
+                    if (userRole !== 'super_admin' && userRole !== 'ceo' && !normalizedDepartment) {
                     res.status(400).json({
                         success: false,
                         message: 'Department is required for non-super-admin users'
@@ -431,7 +431,7 @@ export class AuthController {
                 username,
                 password,
                 userRole,
-                userRole === 'super_admin' ? null : normalizedDepartment,
+                    (userRole === 'super_admin' || userRole === 'ceo') ? null : normalizedDepartment,
                 null,
                 fullName,
                 userEmail,
@@ -576,7 +576,7 @@ export class AuthController {
                     return;
                 }
             } else {
-                if (userRole === 'super_admin') {
+                if (userRole === 'super_admin' || userRole === 'ceo') {
                     normalizedDepartment = null;
                 } else if (!normalizedDepartment) {
                     res.status(400).json({ success: false, message: 'Department is required for non-super-admin users' });

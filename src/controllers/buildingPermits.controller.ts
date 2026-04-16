@@ -120,7 +120,7 @@ export const getAllBuildingPermits = async (req: Request, res: Response): Promis
     try {
         const userRole = (req as any).user?.role;
         const userDepartment = (req as any).user?.department;
-        const query = userRole === 'super_admin'
+        const query = userRole === 'super_admin' || userRole === 'ceo'
             ? 'SELECT * FROM building_permits ORDER BY created_at DESC'
             : `
                 SELECT b.* FROM building_permits b
@@ -128,7 +128,7 @@ export const getAllBuildingPermits = async (req: Request, res: Response): Promis
                 WHERE (CASE WHEN lower(si.station_type_code) = 'frenchise' THEN 'franchise' ELSE lower(si.station_type_code) END) = $1
                 ORDER BY b.created_at DESC
             `;
-        const result = await pool.query(query, userRole === 'super_admin' ? [] : [userDepartment]);
+        const result = await pool.query(query, userRole === 'super_admin' || userRole === 'ceo' ? [] : [userDepartment]);
         res.status(200).json({ message: 'Building Permits retrieved successfully', data: result.rows, count: result.rows.length });
     } catch (error: any) {
         console.error('Error fetching building permits:', error);
