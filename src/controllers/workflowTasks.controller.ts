@@ -913,6 +913,14 @@ export const managerValidateWorkflowTask = async (req: AuthRequest, res: Respons
             }
 
             const oldTaskState = task.status;
+            const executiveAssignee = await pool.query(
+                `SELECT id FROM users WHERE role IN ('ceo', 'super_admin') ORDER BY CASE WHEN role = 'ceo' THEN 0 ELSE 1 END, created_at ASC LIMIT 1`,
+            );
+            if (!executiveAssignee.rows.length) {
+                res.status(404).json({ error: 'No CEO or super admin found to receive manager progress' });
+                return;
+            }
+
             const taskResult = await pool.query(`
                 UPDATE project_workflow_tasks
                 SET status = 'manager_submitted',
@@ -921,10 +929,12 @@ export const managerValidateWorkflowTask = async (req: AuthRequest, res: Respons
                     attachment_url = COALESCE($2, attachment_url),
                     attachment_uploaded_by = CASE WHEN $4 THEN $3 ELSE attachment_uploaded_by END,
                     attachment_uploaded_at = CASE WHEN $4 THEN CURRENT_TIMESTAMP ELSE attachment_uploaded_at END,
+                    assigned_to = $5,
+                    target_department = 'ceo',
                     updated_at = CURRENT_TIMESTAMP
-                WHERE id = $5
+                WHERE id = $6
                 RETURNING *
-            `, [comment || null, normalizedAttachmentUrl || null, userId || null, Boolean(normalizedAttachmentUrl), task.id]);
+            `, [comment || null, normalizedAttachmentUrl || null, userId || null, Boolean(normalizedAttachmentUrl), executiveAssignee.rows[0].id, task.id]);
 
             await recordWorkflowTransition({
                 entityType: 'workflow_task',
