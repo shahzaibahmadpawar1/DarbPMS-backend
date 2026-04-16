@@ -318,7 +318,7 @@ export const getWorkflowTasks = async (req: AuthRequest, res: Response): Promise
                     WHERE (
                         (
                         t.flow_type IN ('request', 'ceo_contact')
-                        AND (t.assigned_to = $2 OR t.created_by = $2)
+                        AND (t.assigned_to = $2 OR t.created_by = $2 OR t.assigned_by = $2)
                     )
                     OR (
                         (t.flow_type NOT IN ('request', 'ceo_contact') OR t.flow_type IS NULL)
