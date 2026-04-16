@@ -389,8 +389,8 @@ export const getAssignableUsers = async (req: AuthRequest, res: Response): Promi
             return;
         }
 
-        if (!(userRole === 'department_manager' || userRole === 'super_admin' || userRole === 'supervisor')) {
-            res.status(403).json({ error: 'Only department managers, supervisors, or super admin can view assignable users' });
+        if (!(userRole === 'department_manager' || userRole === 'super_admin' || userRole === 'supervisor' || userRole === 'ceo')) {
+            res.status(403).json({ error: 'Only department managers, supervisors, super admin, or CEO can view assignable users' });
             return;
         }
 
