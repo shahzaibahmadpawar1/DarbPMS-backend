@@ -4,12 +4,14 @@ export type WorkflowAction = 'Approve' | 'Contract' | 'Documents' | 'Reject';
 export type WorkflowTaskStatus =
     | 'manager_queue'
     | 'assigned'
+    | 'complaint_forwarded'
     | 'employee_submitted'
     | 'manager_submitted'
     | 'under_super_admin_review'
     | 'pending_requester_decision'
     | 'approved'
     | 'rejected'
+    | 'ceo_rejected'
     | 'requester_accepted'
     | 'requester_declined';
 export type WorkflowTaskFlowType = 'contract' | 'documents' | 'request' | 'ceo_contact';
@@ -61,12 +63,14 @@ export const ensureWorkflowSchema = async (): Promise<void> => {
                 CHECK (status IN (
                     'manager_queue',
                     'assigned',
+                    'complaint_forwarded',
                     'employee_submitted',
                     'manager_submitted',
                     'under_super_admin_review',
                     'pending_requester_decision',
                     'approved',
                     'rejected',
+                    'ceo_rejected',
                     'requester_accepted',
                     'requester_declined'
                 )),
@@ -127,12 +131,14 @@ export const ensureWorkflowSchema = async (): Promise<void> => {
         `CHECK (status IN (
             'manager_queue',
             'assigned',
+            'complaint_forwarded',
             'employee_submitted',
             'manager_submitted',
             'under_super_admin_review',
             'pending_requester_decision',
             'approved',
             'rejected',
+            'ceo_rejected',
             'requester_accepted',
             'requester_declined'
         ))`,
