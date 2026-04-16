@@ -117,6 +117,195 @@ const upsertStationFromProjectForContract = async (projectId: string, userId: st
     return stationCode;
 };
 
+const truncateValue = (value: string, maxLength: number): string => {
+    const normalized = String(value || '').trim();
+    if (!normalized) return '';
+    return normalized.length > maxLength ? normalized.slice(0, maxLength) : normalized;
+};
+
+const firstNonEmpty = (...values: Array<string | null | undefined>): string => {
+    for (const value of values) {
+        const normalized = String(value || '').trim();
+        if (normalized) return normalized;
+    }
+    return '';
+};
+
+const syncOwnershipAndLegalFromContract = async (contract: any, userId: string): Promise<void> => {
+    const stationCode = String(contract.station_code || '').trim();
+    if (!stationCode) {
+        throw new Error('Station code is required to copy contract data into ownership and legal records');
+    }
+
+    const stationResult = await pool.query(
+        `SELECT station_name, city, district, station_type_code
+         FROM station_information
+         WHERE station_code = $1
+         LIMIT 1`,
+        [stationCode],
+    );
+    const station = stationResult.rows[0] || {};
+
+    const contractSignatureDate = contract.contract_signature_date || null;
+    const contractSignatureLocation = String(contract.contract_signature_location || '').trim() || station.station_name || null;
+    const ownerId = truncateValue(
+        firstNonEmpty(contract.id_no, contract.tenant_id_no, contract.contract_no, `CON-${String(contract.id || '').slice(0, 8)}`),
+        50,
+    );
+    const ownerName = firstNonEmpty(contract.lessor_name, contract.tenant_name, station.station_name, ownerId);
+
+    const existingOwnerResult = await pool.query(
+        `SELECT id
+         FROM owners
+         WHERE station_code = $1
+         ORDER BY created_at DESC
+         LIMIT 1`,
+        [stationCode],
+    );
+
+    if (existingOwnerResult.rows.length) {
+        await pool.query(
+            `UPDATE owners
+             SET owner_id = COALESCE($1, owner_id),
+                 owner_name = COALESCE($2, owner_name),
+                 issue_date = COALESCE($3, issue_date),
+                 issue_place = COALESCE($4, issue_place),
+                 owner_mobile = COALESCE($5, owner_mobile),
+                 owner_address = COALESCE($6, owner_address),
+                 owner_email = COALESCE($7, owner_email),
+                 station_type_code = COALESCE($8, station_type_code),
+                 station_code = COALESCE($9, station_code),
+                 updated_by = $10,
+                 updated_at = CURRENT_TIMESTAMP
+             WHERE id = $11`,
+            [
+                ownerId,
+                ownerName,
+                contractSignatureDate,
+                contractSignatureLocation,
+                contract.mobile_no || null,
+                null,
+                contract.email || null,
+                station.station_type_code || null,
+                stationCode,
+                userId,
+                existingOwnerResult.rows[0].id,
+            ],
+        );
+    } else {
+        await pool.query(
+            `INSERT INTO owners (
+                owner_id,
+                owner_name,
+                issue_date,
+                issue_place,
+                owner_mobile,
+                owner_address,
+                owner_email,
+                station_type_code,
+                station_code,
+                created_by,
+                updated_by
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $10)`,
+            [
+                ownerId,
+                ownerName,
+                contractSignatureDate,
+                contractSignatureLocation,
+                contract.mobile_no || null,
+                null,
+                contract.email || null,
+                station.station_type_code || null,
+                stationCode,
+                userId,
+            ],
+        );
+    }
+
+    const deedNo = truncateValue(firstNonEmpty(contract.contract_no, `DEED-${String(contract.id || '').slice(0, 8)}`), 100);
+    const existingDeedResult = await pool.query(
+        `SELECT id
+         FROM deeds
+         WHERE station_code = $1
+         ORDER BY created_at DESC
+         LIMIT 1`,
+        [stationCode],
+    );
+
+    const deedValues = [
+        deedNo,
+        contractSignatureDate,
+        contractSignatureLocation,
+        stationCode,
+        null,
+        firstNonEmpty(contract.nationality, contract.tenant_nationality) || null,
+        null,
+        contractSignatureLocation,
+        contract.id_type || null,
+        contractSignatureDate,
+        stationCode,
+        null,
+        station.district || contract.district || null,
+        station.city || contract.city || null,
+        firstNonEmpty(contract.contract_type, station.station_type_code) || null,
+        contract.review_status || 'Approved',
+        stationCode,
+        userId,
+    ];
+
+    if (existingDeedResult.rows.length) {
+        await pool.query(
+            `UPDATE deeds
+             SET deed_no = COALESCE($1, deed_no),
+                 deed_date = COALESCE($2, deed_date),
+                 deed_issue_by = COALESCE($3, deed_issue_by),
+                 real_estate_unit_number = COALESCE($4, real_estate_unit_number),
+                 area = COALESCE($5, area),
+                 nationality = COALESCE($6, nationality),
+                 percentage = COALESCE($7, percentage),
+                 address = COALESCE($8, address),
+                 id_type = COALESCE($9, id_type),
+                 id_date = COALESCE($10, id_date),
+                 land_no = COALESCE($11, land_no),
+                 block_number = COALESCE($12, block_number),
+                 district = COALESCE($13, district),
+                 city = COALESCE($14, city),
+                 unit_type = COALESCE($15, unit_type),
+                 status_code = COALESCE($16, status_code),
+                 station_code = COALESCE($17, station_code),
+                 updated_by = $18,
+                 updated_at = CURRENT_TIMESTAMP
+             WHERE id = $19`,
+            [...deedValues, existingDeedResult.rows[0].id],
+        );
+    } else {
+        await pool.query(
+            `INSERT INTO deeds (
+                deed_no,
+                deed_date,
+                deed_issue_by,
+                real_estate_unit_number,
+                area,
+                nationality,
+                percentage,
+                address,
+                id_type,
+                id_date,
+                land_no,
+                block_number,
+                district,
+                city,
+                unit_type,
+                status_code,
+                station_code,
+                created_by,
+                updated_by
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $18)`,
+            deedValues,
+        );
+    }
+};
+
 export const createOrGetContractDraftFromTask = async (req: Request, res: Response): Promise<void> => {
     try {
         await ensureWorkflowSchema();
@@ -125,6 +314,7 @@ export const createOrGetContractDraftFromTask = async (req: Request, res: Respon
         const { taskId } = req.params as { taskId?: string };
         const userId = (req as any).user?.id as string | undefined;
         const userRole = (req as any).user?.role as string | undefined;
+        const previewRequested = String(req.query?.preview || '').trim() === '1' || String(req.query?.preview || '').trim().toLowerCase() === 'true';
 
         if (!taskId) {
             res.status(400).json({ error: 'taskId is required' });
@@ -152,9 +342,10 @@ export const createOrGetContractDraftFromTask = async (req: Request, res: Respon
         const task = taskResult.rows[0];
 
         const isAssignee = task.assigned_to && String(task.assigned_to) === String(userId);
-        const canAccess = userRole === 'super_admin' || isAssignee;
-        if (!canAccess) {
-            res.status(403).json({ error: 'Only assigned user (or super admin) can start this contract task' });
+        const canPreview = previewRequested && (userRole === 'super_admin' || userRole === 'ceo' || isAssignee);
+        const canStart = !previewRequested && (userRole === 'super_admin' || isAssignee);
+        if (!canPreview && !canStart) {
+            res.status(403).json({ error: previewRequested ? 'Only assigned user, CEO, or super admin can preview this contract task' : 'Only assigned user (or super admin) can start this contract task' });
             return;
         }
 
@@ -214,6 +405,24 @@ export const createOrGetContractDraftFromTask = async (req: Request, res: Respon
                 res.status(200).json({ data: existingContract.rows[0] });
                 return;
             }
+        }
+
+        if (previewRequested) {
+            const previewTaskDraft = await pool.query(
+                `SELECT *
+                 FROM contracts
+                 WHERE workflow_task_id = $1
+                 ORDER BY created_at DESC
+                 LIMIT 1`,
+                [taskId],
+            );
+            if (previewTaskDraft.rows.length) {
+                res.status(200).json({ data: previewTaskDraft.rows[0] });
+                return;
+            }
+
+            res.status(404).json({ error: 'No contract draft is available yet for preview' });
+            return;
         }
 
         const existingTaskDraft = await pool.query(
@@ -658,6 +867,10 @@ export const reviewContract = async (req: Request, res: Response): Promise<void>
                     stationCode: contract.station_code,
                 },
             });
+        }
+
+        if (normalizedDecision === 'approved') {
+            await syncOwnershipAndLegalFromContract(updated.rows[0], userId);
         }
 
         void recordActivity({
