@@ -1216,9 +1216,9 @@ export const reviewWorkflowTask = async (req: AuthRequest, res: Response): Promi
                     UPDATE project_workflow_tasks
                     SET status = $1,
                         ${noteColumn} = $2,
-                        manager_attachment_url = COALESCE($3, manager_attachment_url),
-                        attachment_url = COALESCE($3, attachment_url),
-                        attachment_uploaded_by = CASE WHEN $4 THEN $5 ELSE attachment_uploaded_by END,
+                        manager_attachment_url = COALESCE($3::text, manager_attachment_url),
+                        attachment_url = COALESCE($3::text, attachment_url),
+                        attachment_uploaded_by = CASE WHEN $4::boolean THEN $5::uuid ELSE attachment_uploaded_by END,
                         attachment_uploaded_at = CASE WHEN $4 THEN CURRENT_TIMESTAMP ELSE attachment_uploaded_at END,
                         updated_at = CURRENT_TIMESTAMP
                     WHERE id = $6
@@ -1228,9 +1228,9 @@ export const reviewWorkflowTask = async (req: AuthRequest, res: Response): Promi
                     UPDATE project_workflow_tasks
                     SET status = $1,
                         ${noteColumn} = $2,
-                        manager_attachment_url = CASE WHEN $3 IS NOT NULL THEN $3 ELSE manager_attachment_url END,
-                        attachment_url = CASE WHEN $3 IS NOT NULL THEN $3 ELSE attachment_url END,
-                        attachment_uploaded_by = CASE WHEN $4 THEN $5 ELSE attachment_uploaded_by END,
+                        manager_attachment_url = CASE WHEN $3::text IS NOT NULL THEN $3::text ELSE manager_attachment_url END,
+                        attachment_url = CASE WHEN $3::text IS NOT NULL THEN $3::text ELSE attachment_url END,
+                        attachment_uploaded_by = CASE WHEN $4::boolean THEN $5::uuid ELSE attachment_uploaded_by END,
                         attachment_uploaded_at = CASE WHEN $4 THEN CURRENT_TIMESTAMP ELSE attachment_uploaded_at END,
                         updated_at = CURRENT_TIMESTAMP
                     WHERE id = $6
