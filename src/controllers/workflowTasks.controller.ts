@@ -1096,7 +1096,12 @@ export const reviewWorkflowTask = async (req: AuthRequest, res: Response): Promi
             return;
         }
 
-        if (!(task.status === 'manager_submitted' || task.status === 'under_super_admin_review')) {
+        const isBranchTask = Boolean(task.workflow_path);
+        const canFinalize = isBranchTask
+            ? (task.status === 'assigned' || task.status === 'manager_submitted' || task.status === 'under_super_admin_review')
+            : (task.status === 'manager_submitted' || task.status === 'under_super_admin_review');
+
+        if (!canFinalize) {
             res.status(409).json({ error: 'Task must be submitted by a manager or be under super admin review before final decision' });
             return;
         }
