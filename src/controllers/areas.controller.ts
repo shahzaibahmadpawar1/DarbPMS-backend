@@ -35,22 +35,38 @@ const normalizeComponents = (components: unknown): CommercialComponentInput[] =>
     return components.filter((component) => component && typeof component === 'object') as CommercialComponentInput[];
 };
 
+const toNullableNumber = (value: unknown): number | null => {
+    if (value === '' || value == null) return null;
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+};
+
 const replaceAreaComponents = async (client: any, areaId: string, components: CommercialComponentInput[]): Promise<void> => {
     await client.query('DELETE FROM commercial_components WHERE station_area_id = $1', [areaId]);
 
-    for (const component of components) {
-        const componentQuery = `
-            INSERT INTO commercial_components (station_area_id, building_name, area, component_number)
-            VALUES ($1, $2, $3, $4)
-        `;
-        const componentValues = [
-            areaId,
-            String(component.building || '').trim() || null,
-            component.area === '' || component.area == null ? null : Number(component.area),
-            String(component.number || '').trim() || null,
-        ];
-        await client.query(componentQuery, componentValues);
+    if (!components.length) {
+        return;
     }
+
+    const buildingNames: Array<string | null> = [];
+    const areas: Array<number | null> = [];
+    const componentNumbers: Array<string | null> = [];
+
+    for (const component of components) {
+        buildingNames.push(String(component.building || '').trim() || null);
+        areas.push(toNullableNumber(component.area));
+        componentNumbers.push(String(component.number || '').trim() || null);
+    }
+
+    await client.query(
+        `
+            INSERT INTO commercial_components (station_area_id, building_name, area, component_number)
+            SELECT $1, component_data.building_name, component_data.area, component_data.component_number
+            FROM UNNEST($2::text[], $3::numeric[], $4::text[])
+                AS component_data(building_name, area, component_number)
+        `,
+        [areaId, buildingNames, areas, componentNumbers],
+    );
 };
 
 export const createArea = async (req: Request, res: Response): Promise<void> => {

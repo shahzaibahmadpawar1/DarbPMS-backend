@@ -1,7 +1,7 @@
 import { Response } from 'express';
 import pool from '../config/database';
 import { AuthRequest } from '../types';
-import { ensureWorkflowSchema, recordWorkflowTransition } from '../utils/workflow';
+import { recordWorkflowTransition } from '../utils/workflow';
 import { recordActivity } from '../utils/activity';
 import { isValidRequestTypeForDepartment } from '../utils/requestTypes';
 
@@ -50,8 +50,6 @@ const normalizeDepartment = (
 
 export const submitRequest = async (req: AuthRequest, res: Response): Promise<void> => {
     try {
-        await ensureWorkflowSchema();
-
         const userId = req.user?.id;
         const username = req.user?.username || 'Requester';
         const { requestType, department, priority, subject, dueDate, description, stationCodes } = req.body as {
@@ -89,20 +87,6 @@ export const submitRequest = async (req: AuthRequest, res: Response): Promise<vo
             ))
             : [];
 
-        if (normalizedStationCodes.length > 0) {
-            const stationsResult = await pool.query(
-                'SELECT station_code FROM station_information WHERE station_code = ANY($1::text[])',
-                [normalizedStationCodes],
-            );
-
-            const existingCodes = new Set<string>(stationsResult.rows.map((row) => String(row.station_code)));
-            const missingCodes = normalizedStationCodes.filter((code) => !existingCodes.has(code));
-            if (missingCodes.length > 0) {
-                res.status(400).json({ error: `Unknown station codes: ${missingCodes.join(', ')}` });
-                return;
-            }
-        }
-
         const trimmedSubject = String(subject || '').trim();
         const trimmedDescription = String(description || '').trim();
         if (!trimmedSubject || !trimmedDescription) {
@@ -110,10 +94,28 @@ export const submitRequest = async (req: AuthRequest, res: Response): Promise<vo
             return;
         }
 
-        const reviewer = await pool.query(
+        const reviewerPromise = pool.query(
             `SELECT id, username FROM users WHERE role = 'department_manager' AND department = $1 ORDER BY created_at ASC LIMIT 1`,
             [normalizedDepartment],
         );
+
+        const stationValidationPromise = normalizedStationCodes.length > 0
+            ? pool.query(
+                'SELECT station_code FROM station_information WHERE station_code = ANY($1::text[])',
+                [normalizedStationCodes],
+            )
+            : Promise.resolve({ rows: [] as Array<{ station_code: string }> });
+
+        const [reviewer, stationsResult] = await Promise.all([reviewerPromise, stationValidationPromise]);
+
+        if (normalizedStationCodes.length > 0) {
+            const existingCodes = new Set<string>(stationsResult.rows.map((row) => String(row.station_code)));
+            const missingCodes = normalizedStationCodes.filter((code) => !existingCodes.has(code));
+            if (missingCodes.length > 0) {
+                res.status(400).json({ error: `Unknown station codes: ${missingCodes.join(', ')}` });
+                return;
+            }
+        }
 
         if (!reviewer.rows.length) {
             res.status(404).json({ error: 'No department manager found for the selected department' });

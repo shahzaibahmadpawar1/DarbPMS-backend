@@ -37,6 +37,8 @@ dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 5000;
+const isProduction = process.env.NODE_ENV === 'production';
+const slowRequestThresholdMs = Number(process.env.SLOW_REQUEST_THRESHOLD_MS || 800);
 
 // Middleware
 const extraOrigins = (process.env.CORS_ORIGIN || '')
@@ -188,16 +190,27 @@ const buildWorkflowScopeQuery = (departmentType: string | null, stationType: Das
                 INNER JOIN scoped_projects p ON p.id = t.investment_project_id
                 WHERE t.flow_type = 'documents'
                   AND t.status IN ('manager_queue', 'assigned', 'employee_submitted', 'under_super_admin_review')
+            ),
+            project_summary AS (
+                SELECT
+                    COUNT(*)::bigint AS total_projects,
+                    COUNT(*) FILTER (WHERE review_status = 'Pending Review')::bigint AS new_project,
+                    COUNT(*) FILTER (WHERE review_status = 'Pending Review')::bigint AS pending_review,
+                    COUNT(*) FILTER (WHERE review_status = 'Validated')::bigint AS validated,
+                    COUNT(*) FILTER (WHERE review_status = 'Approved')::bigint AS approved,
+                    COUNT(*) FILTER (WHERE review_status = 'Rejected')::bigint AS rejected
+                FROM scoped_projects
             )
             SELECT
-                (SELECT COUNT(*) FROM scoped_projects) AS total_projects,
-                (SELECT COUNT(*) FROM scoped_projects WHERE review_status = 'Pending Review') AS new_project,
-                (SELECT COUNT(*) FROM scoped_projects WHERE review_status = 'Pending Review') AS pending_review,
-                (SELECT COUNT(*) FROM scoped_projects WHERE review_status = 'Validated') AS validated,
-                (SELECT COUNT(*) FROM contract_projects) AS contracted,
-                (SELECT COUNT(*) FROM document_projects) AS documented,
-                (SELECT COUNT(*) FROM scoped_projects WHERE review_status = 'Approved') AS approved,
-                (SELECT COUNT(*) FROM scoped_projects WHERE review_status = 'Rejected') AS rejected
+                ps.total_projects,
+                ps.new_project,
+                ps.pending_review,
+                ps.validated,
+                (SELECT COUNT(*)::bigint FROM contract_projects) AS contracted,
+                (SELECT COUNT(*)::bigint FROM document_projects) AS documented,
+                ps.approved,
+                ps.rejected
+            FROM project_summary ps
         `,
         params,
     };
@@ -421,7 +434,24 @@ app.use(express.urlencoded({ extended: true }));
 
 // Request logging middleware
 app.use((req: Request, _res: Response, next: NextFunction) => {
-    console.log(`${new Date().toISOString()} - ${req.method} ${req.path}`);
+    if (!isProduction) {
+        console.log(`${new Date().toISOString()} - ${req.method} ${req.path}`);
+    }
+    next();
+});
+
+// Lightweight request timing focused on known slow user journeys.
+app.use((req: Request, res: Response, next: NextFunction) => {
+    const start = Date.now();
+
+    res.on('finish', () => {
+        const durationMs = Date.now() - start;
+        if (durationMs < slowRequestThresholdMs) return;
+        if (!req.path.startsWith('/api/')) return;
+
+        console.warn(`Slow request: ${req.method} ${req.path} ${durationMs}ms status=${res.statusCode}`);
+    });
+
     next();
 });
 

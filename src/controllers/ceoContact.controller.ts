@@ -1,13 +1,11 @@
 import { Response } from 'express';
 import pool from '../config/database';
 import { AuthRequest } from '../types';
-import { ensureWorkflowSchema, recordWorkflowTransition } from '../utils/workflow';
+import { recordWorkflowTransition } from '../utils/workflow';
 import { recordActivity } from '../utils/activity';
 
 export const submitCeoContact = async (req: AuthRequest, res: Response): Promise<void> => {
     try {
-        await ensureWorkflowSchema();
-
         const userId = req.user?.id;
         const username = req.user?.username || 'Requester';
         const {

@@ -396,9 +396,13 @@ export const updateInvestmentProject = async (req: Request, res: Response): Prom
         };
         const submitFlag = req.body?.submit;
         const shouldSubmit = submitFlag === true || submitFlag === 'true';
+        const updatableKeys = new Set<string>([
+            ...Object.keys(fieldMap),
+            ...Object.values(fieldMap),
+        ]);
 
         const fields = Object.entries(req.body)
-            .filter(([k, v]) => k !== 'submit' && v !== undefined);
+            .filter(([k, v]) => k !== 'submit' && v !== undefined && updatableKeys.has(k));
         if (!fields.length) { res.status(400).json({ error: 'No fields to update' }); return; }
 
         const touchesElements = Object.keys(req.body || {}).some((key) => ELEMENT_UPDATE_KEYS.has(key));
