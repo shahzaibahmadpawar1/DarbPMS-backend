@@ -47,6 +47,7 @@ const extraOrigins = (process.env.CORS_ORIGIN || '')
     .filter(Boolean);
 
 const allowedOrigins = [
+    'http://localhost:5173',
     'http://localhost:5176',
     'http://localhost:3000',
     'https://stg.pms.darbstations.com.sa',
@@ -63,8 +64,7 @@ const isLocalhostDevOrigin = (origin: string): boolean => {
         if (parsed.protocol !== 'http:') {
             return false;
         }
-        if (parsed.host === 'localhost' || parsed.hostname === '127.0.0.1') {
-            // Require an explicit port (localhost without port is "localhost" host with no port, still ok)
+        if (parsed.hostname === 'localhost' || parsed.hostname === '127.0.0.1') {
             return true;
         }
         return false;
