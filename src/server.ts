@@ -47,21 +47,46 @@ const extraOrigins = (process.env.CORS_ORIGIN || '')
     .filter(Boolean);
 
 const allowedOrigins = [
-    'http://localhost:5173',
+    'http://localhost:5176',
     'http://localhost:3000',
     'https://stg.pms.darbstations.com.sa',
     'https://pms.darbstations.com.sa',
     ...extraOrigins,
 ];
 
+const isLocalhostDevOrigin = (origin: string): boolean => {
+    // Vite (and other dev tools) can hop ports when 5173 is busy, so we allow
+    // any localhost/127.0.0.1 origin with a port, not just a hard-coded list.
+    // Examples: http://localhost:5176, http://127.0.0.1:4173
+    try {
+        const parsed = new URL(origin);
+        if (parsed.protocol !== 'http:') {
+            return false;
+        }
+        if (parsed.host === 'localhost' || parsed.hostname === '127.0.0.1') {
+            // Require an explicit port (localhost without port is "localhost" host with no port, still ok)
+            return true;
+        }
+        return false;
+    } catch {
+        return false;
+    }
+};
+
 const corsOptions: CorsOptions = {
     origin: (origin, callback) => {
-        if (!origin || allowedOrigins.includes(origin)) {
+        if (!origin) {
             callback(null, true);
-        } else {
-            console.log(`CORS blocked for origin: ${origin}`);
-            callback(new Error('Not allowed by CORS'));
+            return;
         }
+
+        if (allowedOrigins.includes(origin) || isLocalhostDevOrigin(origin)) {
+            callback(null, true);
+            return;
+        }
+
+        console.log(`CORS blocked for origin: ${origin}`);
+        callback(new Error('Not allowed by CORS'));
     },
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
