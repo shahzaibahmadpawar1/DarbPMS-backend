@@ -102,6 +102,7 @@ export class AuthController {
             user_type: user.user_type ?? 'internal',
             status: user.status ?? 'active',
             station_codes: Array.isArray(user.station_codes) ? user.station_codes : [],
+            last_login_at: user.last_login_at ?? null,
             created_at: user.created_at,
             updated_at: user.updated_at
         };
@@ -175,9 +176,6 @@ export class AuthController {
                 []
             );
 
-            // Return user data without password
-            const userResponse: UserResponse = AuthController.toUserResponse(user);
-
             // Generate real JWT token
             const jwtSecret = process.env.JWT_SECRET;
             if (!jwtSecret) {
@@ -189,6 +187,14 @@ export class AuthController {
                 jwtSecret,
                 { expiresIn: '24h' }
             );
+
+            const lastLoginAt = await UserModel.touchLastLoginById(user.id);
+
+            // Return user data without password
+            const userResponse: UserResponse = AuthController.toUserResponse({
+                ...user,
+                last_login_at: lastLoginAt,
+            });
 
             void recordActivity({
                 actorId: user.id,

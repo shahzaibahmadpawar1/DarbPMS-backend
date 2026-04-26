@@ -422,6 +422,25 @@ export class UserModel {
         }
     }
 
+    static async touchLastLoginById(id: string): Promise<Date | null> {
+        const query = `
+            UPDATE users
+            SET last_login_at = CURRENT_TIMESTAMP
+            WHERE id = $1
+            RETURNING last_login_at
+        `;
+
+        try {
+            const result = await pool.query(query, [id]);
+            return (result.rows[0]?.last_login_at as Date | null) ?? null;
+        } catch (error: any) {
+            if (isSchemaCompatibilityError(error)) {
+                return null;
+            }
+            throw error;
+        }
+    }
+
     // Delete user by ID
     static async deleteById(id: string): Promise<boolean> {
         const query = 'DELETE FROM users WHERE id = $1 RETURNING id';

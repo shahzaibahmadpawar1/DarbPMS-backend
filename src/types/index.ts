@@ -37,6 +37,7 @@ export interface User {
     user_type: UserType;
     status: UserStatus;
     station_codes?: string[];
+    last_login_at?: Date | null;
     created_at: Date;
     updated_at: Date;
 }
@@ -54,6 +55,7 @@ export interface UserResponse {
     user_type: UserType;
     status: UserStatus;
     station_codes?: string[];
+    last_login_at?: Date | null;
     created_at: Date;
     updated_at: Date;
 }
