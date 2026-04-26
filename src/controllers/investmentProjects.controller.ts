@@ -1,7 +1,6 @@
 import { Request, Response } from 'express';
 import pool from '../config/database';
 import { createInitialReviewTaskForProject } from './workflowTasks.controller';
-import { deriveAction, recordWorkflowTransition } from '../utils/workflow';
 import { isSchemaCompatibilityError } from '../utils/dbErrors';
 import { recordActivity } from '../utils/activity';
 
@@ -68,16 +67,6 @@ const normalizeContractType = (value: unknown): string | null => {
     return null;
 };
 
-const normalizeStationType = (value: unknown): 'investment' | 'franchise' | 'operation' | 'rent' | 'ownership' => {
-    const normalized = String(value || '').trim().toLowerCase();
-    if (normalized === 'frenchise') return 'franchise';
-    if (normalized === 'franchise') return 'franchise';
-    if (normalized === 'operation') return 'operation';
-    if (normalized === 'rent') return 'rent';
-    if (normalized === 'ownership') return 'ownership';
-    return 'investment';
-};
-
 const DEFAULT_COMMERCIAL_ELEMENT_NAMES = ['Super Market', 'Fuel Station', 'Kiosks', 'Retail Shop', 'Drive Through'];
 const ELEMENT_UPDATE_KEYS = new Set([
     'commercialElements',
@@ -114,41 +103,6 @@ const getMissingDefaultElements = (commercialElements: unknown): string[] => {
     );
 
     return DEFAULT_COMMERCIAL_ELEMENT_NAMES.filter((name) => !provided.has(normalizeElementName(name)));
-};
-
-const upsertStationFromProject = async (project: any, userId: string): Promise<void> => {
-    const stationCode = String(project.project_code || '').trim();
-    const stationName = String(project.project_name || '').trim();
-
-    if (!stationCode || !stationName) {
-        throw new Error('Station sync failed: project code and project name are required');
-    }
-
-    await pool.query(`
-        INSERT INTO station_information (
-            station_code, station_name, city, district,
-            geographic_location, station_type_code, station_status_code,
-            created_by, updated_by
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8)
-        ON CONFLICT (station_code) DO UPDATE SET
-            station_name = EXCLUDED.station_name,
-            city = EXCLUDED.city,
-            district = EXCLUDED.district,
-            geographic_location = EXCLUDED.geographic_location,
-            station_type_code = EXCLUDED.station_type_code,
-            station_status_code = EXCLUDED.station_status_code,
-            updated_by = EXCLUDED.updated_by,
-            updated_at = CURRENT_TIMESTAMP
-    `, [
-        stationCode,
-        stationName,
-        project.city,
-        project.district,
-        project.google_location,
-        normalizeStationType(project.department_type),
-        project.project_status || 'Active',
-        userId,
-    ]);
 };
 
 // ─── CREATE ───────────────────────────────────────────────────────────────────
@@ -528,82 +482,11 @@ export const getFeasibilityStats = async (req: Request, res: Response): Promise<
 };
 
 // ─── UPDATE REVIEW STATUS ────────────────────────────────────────────────────
-export const updateInvestmentProjectReviewStatus = async (req: Request, res: Response): Promise<void> => {
-    try {
-        const { id } = req.params;
-        const { reviewStatus, comment, action } = req.body;
-        const userId = (req as any).user?.id;
-        const userRole = (req as any).user?.role;
-
-        if (userRole !== 'super_admin' && userRole !== 'ceo') {
-            res.status(403).json({ error: 'Only super admin or CEO can apply project review actions from this endpoint' });
-            return;
-        }
-
-        const normalizedAction = deriveAction(action || reviewStatus);
-        if (!(normalizedAction === 'Approve' || normalizedAction === 'Reject')) {
-            res.status(400).json({ error: 'Only Approve or Reject actions are allowed on this endpoint' });
-            return;
-        }
-
-        let nextReviewStatus: 'Approved' | 'Rejected' | 'Validated';
-        let workflowPath: 'contract' | 'documents' | null = null;
-
-        const previousResult = await pool.query('SELECT review_status FROM investment_projects WHERE id = $1 LIMIT 1', [id]);
-        const previousStatus = previousResult.rows[0]?.review_status || null;
-
-        if (normalizedAction === 'Approve') {
-            nextReviewStatus = 'Approved';
-        } else {
-            nextReviewStatus = 'Rejected';
-        }
-
-        const commentField = userRole === 'super_admin' || userRole === 'ceo' ? 'ceo_comment' : 'pm_comment';
-        const updateResult = await pool.query(
-            `UPDATE investment_projects
-             SET review_status = $1,
-                 workflow_path = $2,
-                 ${commentField} = $3,
-                 updated_by = $4,
-                 updated_at = CURRENT_TIMESTAMP
-             WHERE id = $5
-             RETURNING *`,
-            [nextReviewStatus, workflowPath, comment || null, userId, id],
-        );
-
-        if (!updateResult.rows.length) {
-            res.status(404).json({ error: 'Project not found' });
-            return;
-        }
-
-        // If approved by CEO, auto-create a station in station_information
-        if (nextReviewStatus === 'Approved') {
-            const project = updateResult.rows[0];
-            await upsertStationFromProject(project, userId);
-        }
-
-        await recordWorkflowTransition({
-            entityType: 'investment_project',
-            entityId: id,
-            oldState: previousStatus,
-            newState: nextReviewStatus,
-            changedBy: userId,
-            note: comment || `Workflow action: ${normalizedAction}`,
-            metadata: {
-                action: normalizedAction,
-                workflowPath,
-                actorRole: userRole,
-            },
-        });
-
-        res.status(200).json({
-            message: 'Project workflow action applied',
-            data: updateResult.rows[0],
-            action: normalizedAction,
-        });
-    } catch (error: any) {
-        res.status(500).json({ error: 'Failed to update review status', details: error.message });
-    }
+export const updateInvestmentProjectReviewStatus = async (_req: Request, res: Response): Promise<void> => {
+    res.status(410).json({
+        error: 'Direct project review from this endpoint is deprecated.',
+        details: 'Use Tasks workflow endpoints for project approval/rejection.',
+    });
 };
 
 // ─── CONTRACT STATS ───────────────────────────────────────────────────────────
