@@ -234,6 +234,19 @@ const buildDashboardStationQuery = (
         const params: unknown[] = [];
         const whereClauses: string[] = [];
 
+        // Hide stations that are still in contract/document workflow (not CEO approved yet).
+        // These stations may exist because contract/document flows can upsert station_information early,
+        // but they should not appear in station views until final CEO approval.
+        whereClauses.push(`
+            NOT EXISTS (
+                SELECT 1
+                FROM investment_projects p
+                WHERE COALESCE(NULLIF(p.station_code, ''), p.project_code) = station_information.station_code
+                  AND p.workflow_path IN ('contract', 'documents')
+                  AND COALESCE(p.review_status, '') <> 'Approved'
+            )
+        `);
+
         if (departmentType) {
             params.push(departmentType);
             whereClauses.push(`(CASE WHEN lower(station_type_code) = 'frenchise' THEN 'franchise' ELSE lower(station_type_code) END) = $${params.length}`);

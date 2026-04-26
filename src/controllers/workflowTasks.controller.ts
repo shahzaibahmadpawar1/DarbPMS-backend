@@ -60,37 +60,6 @@ const normalizeStationType = (value: unknown): 'investment' | 'franchise' | 'ope
 
 const isValidHttpUrl = (value: string): boolean => /^https?:\/\//i.test(value.trim());
 
-const isRequestTask = (task: { flow_type?: string | null }): boolean => task.flow_type === 'request';
-
-const isCeoContactTask = (task: { flow_type?: string | null }): boolean => task.flow_type === 'ceo_contact';
-
-const getSingleAttachmentUrl = (task: {
-    attachment_url?: string | null;
-    manager_attachment_url?: string | null;
-    employee_attachment_url?: string | null;
-}): string | null => {
-    return task.attachment_url || task.manager_attachment_url || task.employee_attachment_url || null;
-};
-
-const resolveRequestAttachment = (
-    task: {
-        attachment_url?: string | null;
-        manager_attachment_url?: string | null;
-        employee_attachment_url?: string | null;
-    },
-    candidateUrl: string,
-): { resolvedAttachment: string | null; usesNewUpload: boolean } => {
-    const existingAttachment = getSingleAttachmentUrl(task);
-    if (candidateUrl) {
-        if (existingAttachment && existingAttachment !== candidateUrl) {
-            throw new Error('Only one attachment is allowed for request responses.');
-        }
-        return { resolvedAttachment: candidateUrl, usesNewUpload: candidateUrl !== existingAttachment };
-    }
-
-    return { resolvedAttachment: existingAttachment, usesNewUpload: false };
-};
-
 export const createContractRequestTask = async (req: AuthRequest, res: Response): Promise<void> => {
     try {
         await ensureWorkflowSchema();
@@ -130,17 +99,6 @@ export const createContractRequestTask = async (req: AuthRequest, res: Response)
         const assignee = await pool.query('SELECT id FROM users WHERE id = $1 LIMIT 1', [resolvedAssigneeId]);
         if (!assignee.rows.length) {
             res.status(404).json({ error: 'Assignee not found' });
-            return;
-        }
-
-        const stationLookup = await pool.query(
-            'SELECT station_code FROM station_information WHERE station_code = $1 LIMIT 1',
-            [resolvedStationCode],
-        );
-        if (!stationLookup.rows.length) {
-            res.status(400).json({
-                error: `Station ${resolvedStationCode} does not exist. Create station information first.`,
-            });
             return;
         }
 
@@ -299,8 +257,7 @@ export const getWorkflowTasks = async (req: AuthRequest, res: Response): Promise
             LEFT JOIN users acu ON acu.id = t.created_by
         `;
         const params: unknown[] = [];
-        const isExecutiveRole = userRole === 'super_admin' || userRole === 'ceo';
-        const restrictInvestmentProjectTasks = !isExecutiveRole && normalizeDepartment(userDepartment) !== 'project';
+        const restrictInvestmentProjectTasks = userRole !== 'super_admin' && normalizeDepartment(userDepartment) !== 'project';
         const investmentProjectTaskVisibilityClause = restrictInvestmentProjectTasks
             ? `
                 AND NOT (
@@ -310,7 +267,7 @@ export const getWorkflowTasks = async (req: AuthRequest, res: Response): Promise
             `
             : '';
 
-        if (!isExecutiveRole) {
+        if (userRole !== 'super_admin') {
             const department = normalizeDepartment(userDepartment);
             if (!department && userRole === 'department_manager') {
                 throw new Error('Department is required for this action');
@@ -321,7 +278,7 @@ export const getWorkflowTasks = async (req: AuthRequest, res: Response): Promise
                     WHERE (
                         (
                         t.flow_type IN ('request', 'ceo_contact')
-                        AND (t.assigned_to = $2 OR t.created_by = $2 OR t.assigned_by = $2)
+                        AND (t.assigned_to = $2 OR t.created_by = $2)
                     )
                     OR (
                         (t.flow_type NOT IN ('request', 'ceo_contact') OR t.flow_type IS NULL)
@@ -391,8 +348,8 @@ export const getAssignableUsers = async (req: AuthRequest, res: Response): Promi
             return;
         }
 
-        if (!(userRole === 'department_manager' || userRole === 'super_admin' || userRole === 'supervisor' || userRole === 'ceo')) {
-            res.status(403).json({ error: 'Only department managers, supervisors, super admin, or CEO can view assignable users' });
+        if (!(userRole === 'department_manager' || userRole === 'super_admin' || userRole === 'supervisor')) {
+            res.status(403).json({ error: 'Only department managers, supervisors, or super admin can view assignable users' });
             return;
         }
 
@@ -435,7 +392,7 @@ export const assignWorkflowTask = async (req: AuthRequest, res: Response): Promi
             return;
         }
 
-        if (!(actorRole === 'department_manager' || actorRole === 'super_admin' || actorRole === 'supervisor' || actorRole === 'ceo')) {
+        if (!(actorRole === 'department_manager' || actorRole === 'super_admin' || actorRole === 'supervisor')) {
             res.status(403).json({ error: 'Only department managers, supervisors, or super admin can assign tasks' });
             return;
         }
@@ -458,9 +415,9 @@ export const assignWorkflowTask = async (req: AuthRequest, res: Response): Promi
         }
 
         const taskLookup = await pool.query(`
-            SELECT t.status, t.assigned_to, t.origin_department, t.target_department, t.flow_type, p.workflow_path
+            SELECT t.status, t.assigned_to, t.origin_department, t.target_department, p.workflow_path
             FROM project_workflow_tasks t
-            LEFT JOIN investment_projects p ON p.id = t.investment_project_id
+            JOIN investment_projects p ON p.id = t.investment_project_id
             WHERE t.id = $1
             LIMIT 1
         `, [id]);
@@ -471,10 +428,7 @@ export const assignWorkflowTask = async (req: AuthRequest, res: Response): Promi
 
         const task = taskLookup.rows[0];
 
-        const ceoContactTask = isCeoContactTask(task);
-        const requestTask = isRequestTask(task);
-
-        if (actorRole !== 'super_admin' && actorRole !== 'ceo') {
+        if (actorRole !== 'super_admin') {
             if (!actorDepartment) {
                 res.status(403).json({ error: 'Department is required for this action' });
                 return;
@@ -488,39 +442,13 @@ export const assignWorkflowTask = async (req: AuthRequest, res: Response): Promi
                 return;
             }
 
-            if (!requestTask && resolvedTargetDepartment !== actorDepartment) {
+            if (resolvedTargetDepartment !== actorDepartment) {
                 res.status(403).json({ error: 'Department managers and supervisors can only assign within their own department' });
                 return;
             }
         }
 
-        if (requestTask) {
-            if (task.status !== 'assigned') {
-                res.status(409).json({ error: 'Request task must be in assigned state before delegation' });
-                return;
-            }
-
-            if (task.assigned_to !== actorId && actorRole !== 'super_admin') {
-                res.status(403).json({ error: 'Only current assignee can delegate this request task' });
-                return;
-            }
-        } else if (ceoContactTask) {
-            const canForward = task.status === 'assigned' || task.status === 'ceo_rejected';
-            if (!canForward) {
-                res.status(409).json({ error: 'CEO contact task must be assigned or CEO rejected before forwarding' });
-                return;
-            }
-
-            if (!(actorRole === 'super_admin' || actorRole === 'ceo')) {
-                res.status(403).json({ error: 'Only CEO or super admin can forward CEO contact tasks' });
-                return;
-            }
-
-            if (assignee.rows[0].role !== 'department_manager') {
-                res.status(403).json({ error: 'CEO contact tasks must be forwarded to a department manager' });
-                return;
-            }
-        } else if (task.status !== 'manager_queue' || task.assigned_to) {
+        if (task.status !== 'manager_queue' || task.assigned_to) {
             res.status(409).json({ error: 'Task is already assigned and cannot be reassigned' });
             return;
         }
@@ -535,18 +463,19 @@ export const assignWorkflowTask = async (req: AuthRequest, res: Response): Promi
             return;
         }
 
-        const nextStatus = ceoContactTask ? 'complaint_forwarded' : 'assigned';
         const result = await pool.query(`
             UPDATE project_workflow_tasks
             SET assigned_to = $1,
                 assigned_by = $2,
                 target_department = $3,
                 assignee_note = $4,
-                status = $5,
+                status = 'assigned',
                 updated_at = CURRENT_TIMESTAMP
-            WHERE id = $6
+            WHERE id = $5
+              AND status = 'manager_queue'
+              AND assigned_to IS NULL
             RETURNING *
-        `, [assignedToUserId, actorId, resolvedTargetDepartment, String(assigneeNote || '').trim() || null, nextStatus, id]);
+        `, [assignedToUserId, actorId, resolvedTargetDepartment, String(assigneeNote || '').trim() || null, id]);
 
         if (!result.rows.length) {
             res.status(409).json({ error: 'Task is already assigned and cannot be reassigned' });
@@ -556,16 +485,14 @@ export const assignWorkflowTask = async (req: AuthRequest, res: Response): Promi
         await recordWorkflowTransition({
             entityType: 'workflow_task',
             entityId: id,
-            oldState: task.status,
-            newState: nextStatus,
+            oldState: 'manager_queue',
+            newState: 'assigned',
             changedBy: actorId,
-            note: ceoContactTask ? 'CEO contact forwarded to department manager' : 'Task assigned to employee',
+            note: 'Task assigned to employee',
             metadata: {
                 assignedToUserId,
                 targetDepartment: resolvedTargetDepartment,
                 assigneeNote: String(assigneeNote || '').trim() || null,
-                requestTask,
-                ceoContactTask,
             },
         });
 
@@ -575,20 +502,16 @@ export const assignWorkflowTask = async (req: AuthRequest, res: Response): Promi
             action: 'assign',
             entityType: 'workflow_task',
             entityId: id,
-            summary: ceoContactTask ? 'forwarded CEO contact task to department manager' : 'assigned workflow task to employee',
+            summary: 'assigned workflow task to employee',
             metadata: {
                 assignedToUserId,
                 targetDepartment: resolvedTargetDepartment,
-                ceoContactTask,
             },
             sourcePath: '/api/workflow-tasks/:id/assign',
             requestMethod: 'POST',
         }).catch((err) => console.error('Activity log failed:', err));
 
-        res.status(200).json({
-            message: ceoContactTask ? 'CEO contact forwarded successfully' : 'Task assigned successfully',
-            data: result.rows[0],
-        });
+        res.status(200).json({ message: 'Task assigned successfully', data: result.rows[0] });
     } catch (error: any) {
         res.status(500).json({ error: 'Failed to assign task', details: error.message });
     }
@@ -680,7 +603,7 @@ export const submitEmployeeAttachment = async (req: AuthRequest, res: Response):
         const taskLookup = await pool.query(`
             SELECT t.*, p.workflow_path
             FROM project_workflow_tasks t
-            LEFT JOIN investment_projects p ON p.id = t.investment_project_id
+            JOIN investment_projects p ON p.id = t.investment_project_id
             WHERE t.id = $1
             LIMIT 1
         `, [id]);
@@ -697,33 +620,17 @@ export const submitEmployeeAttachment = async (req: AuthRequest, res: Response):
             return;
         }
 
-        const requestTask = isRequestTask(task);
-        let resolvedAttachment: string | null = null;
-        let usesNewUpload = false;
-
-        if (requestTask) {
-            try {
-                const resolved = resolveRequestAttachment(task, normalizedAttachmentUrl);
-                resolvedAttachment = resolved.resolvedAttachment;
-                usesNewUpload = resolved.usesNewUpload;
-            } catch (attachmentError: any) {
-                res.status(409).json({ error: attachmentError.message });
-                return;
-            }
-        } else {
-            resolvedAttachment =
-                normalizedAttachmentUrl
-                || task.attachment_url
-                || task.employee_attachment_url
-                || task.manager_attachment_url;
-
-            if (!resolvedAttachment) {
-                res.status(400).json({
-                    error: 'Attachment is required before submitting.',
-                });
-                return;
-            }
-            usesNewUpload = Boolean(normalizedAttachmentUrl);
+        const resolvedAttachment =
+            normalizedAttachmentUrl
+            || task.attachment_url
+            || task.employee_attachment_url
+            || task.manager_attachment_url;
+        const hasAtLeastOneAttachment = Boolean(resolvedAttachment);
+        if (!hasAtLeastOneAttachment) {
+            res.status(400).json({
+                error: 'Attachment is required before submitting.',
+            });
+            return;
         }
 
         const nextStatus = task.workflow_path ? 'manager_submitted' : 'employee_submitted';
@@ -751,9 +658,8 @@ export const submitEmployeeAttachment = async (req: AuthRequest, res: Response):
             note: note || 'Employee submitted attachment',
             metadata: {
                 attachmentUrl: resolvedAttachment,
-                usedExistingAttachment: !usesNewUpload,
+                usedExistingAttachment: !normalizedAttachmentUrl,
                 branchWorkflow: Boolean(task.workflow_path),
-                requestTask,
             },
         });
 
@@ -767,7 +673,7 @@ export const submitEmployeeAttachment = async (req: AuthRequest, res: Response):
             metadata: {
                 newStatus: nextStatus,
                 hasNote: Boolean(note),
-                usedExistingAttachment: !usesNewUpload,
+                usedExistingAttachment: !normalizedAttachmentUrl,
             },
             sourcePath: '/api/workflow-tasks/:id/submit-attachment',
             requestMethod: 'POST',
@@ -807,7 +713,7 @@ export const managerValidateWorkflowTask = async (req: AuthRequest, res: Respons
         const taskLookup = await pool.query(`
             SELECT t.*, p.workflow_path, p.review_status
             FROM project_workflow_tasks t
-            LEFT JOIN investment_projects p ON p.id = t.investment_project_id
+            JOIN investment_projects p ON p.id = t.investment_project_id
             WHERE t.id = $1
             LIMIT 1
         `, [id]);
@@ -818,158 +724,6 @@ export const managerValidateWorkflowTask = async (req: AuthRequest, res: Respons
         }
 
         const task = taskLookup.rows[0];
-        const requestTask = isRequestTask(task);
-
-        if (requestTask) {
-            if (task.status !== 'employee_submitted') {
-                res.status(409).json({ error: 'Request task must be employee submitted before manager validation' });
-                return;
-            }
-
-            const normalizedAttachmentUrl = String(attachmentUrl || '').trim();
-            if (normalizedAttachmentUrl && !isValidHttpUrl(normalizedAttachmentUrl)) {
-                res.status(400).json({ error: 'attachmentUrl must be a valid http/https URL' });
-                return;
-            }
-
-            let resolvedAttachment: string | null = null;
-            let usesNewUpload = false;
-            try {
-                const resolved = resolveRequestAttachment(task, normalizedAttachmentUrl);
-                resolvedAttachment = resolved.resolvedAttachment;
-                usesNewUpload = resolved.usesNewUpload;
-            } catch (attachmentError: any) {
-                res.status(409).json({ error: attachmentError.message });
-                return;
-            }
-
-            const taskResult = await pool.query(`
-                UPDATE project_workflow_tasks
-                SET status = 'pending_requester_decision',
-                    manager_note = COALESCE($1, manager_note),
-                    manager_attachment_url = COALESCE($2, manager_attachment_url),
-                    attachment_url = COALESCE($2, attachment_url),
-                    attachment_uploaded_by = CASE WHEN $4 THEN $3 ELSE attachment_uploaded_by END,
-                    attachment_uploaded_at = CASE WHEN $4 THEN CURRENT_TIMESTAMP ELSE attachment_uploaded_at END,
-                    updated_at = CURRENT_TIMESTAMP
-                WHERE id = $5
-                RETURNING *
-            `, [comment || null, resolvedAttachment, userId || null, usesNewUpload, id]);
-
-            await recordWorkflowTransition({
-                entityType: 'workflow_task',
-                entityId: id,
-                oldState: task.status,
-                newState: 'pending_requester_decision',
-                changedBy: userId,
-                note: comment || 'Department manager validated request response',
-                metadata: {
-                    actorRole: userRole,
-                    requestTask: true,
-                },
-            });
-
-            void recordActivity({
-                actorId: userId,
-                action: 'validate',
-                entityType: 'workflow_task',
-                entityId: id,
-                summary: 'validated request and sent to requester decision',
-                metadata: {
-                    hasComment: Boolean(comment),
-                },
-                sourcePath: '/api/workflow-tasks/:id/validate',
-                requestMethod: 'POST',
-            }).catch((err) => console.error('Activity log failed:', err));
-
-            res.status(200).json({
-                message: 'Request response validated and sent to requester decision',
-                data: taskResult.rows[0],
-            });
-            return;
-        }
-
-        if (isCeoContactTask(task)) {
-            if (task.status !== 'complaint_forwarded') {
-                res.status(409).json({ error: 'CEO contact task must be complaint forwarded before manager progress can be sent' });
-                return;
-            }
-
-            if (task.assigned_to !== userId && userRole !== 'super_admin') {
-                res.status(403).json({ error: 'Only the assigned department manager can submit progress' });
-                return;
-            }
-
-            const normalizedAttachmentUrl = String(attachmentUrl || '').trim();
-            if (normalizedAttachmentUrl && !isValidHttpUrl(normalizedAttachmentUrl)) {
-                res.status(400).json({ error: 'attachmentUrl must be a valid http/https URL' });
-                return;
-            }
-
-            const resolvedAttachmentUrl = normalizedAttachmentUrl || task.attachment_url || task.manager_attachment_url || task.employee_attachment_url;
-            if (!comment && !resolvedAttachmentUrl) {
-                res.status(400).json({ error: 'Add a comment or attachment before sending progress to CEO' });
-                return;
-            }
-
-            const oldTaskState = task.status;
-            const executiveAssignee = await pool.query(
-                `SELECT id FROM users WHERE role IN ('ceo', 'super_admin') ORDER BY CASE WHEN role = 'ceo' THEN 0 ELSE 1 END, created_at ASC LIMIT 1`,
-            );
-            if (!executiveAssignee.rows.length) {
-                res.status(404).json({ error: 'No CEO or super admin found to receive manager progress' });
-                return;
-            }
-
-            const taskResult = await pool.query(`
-                UPDATE project_workflow_tasks
-                SET status = 'manager_submitted',
-                    manager_note = COALESCE($1, manager_note),
-                    manager_attachment_url = COALESCE($2, manager_attachment_url),
-                    attachment_url = COALESCE($2, attachment_url),
-                    attachment_uploaded_by = CASE WHEN $4 THEN $3 ELSE attachment_uploaded_by END,
-                    attachment_uploaded_at = CASE WHEN $4 THEN CURRENT_TIMESTAMP ELSE attachment_uploaded_at END,
-                    assigned_to = $5,
-                    target_department = 'ceo',
-                    updated_at = CURRENT_TIMESTAMP
-                WHERE id = $6
-                RETURNING *
-            `, [comment || null, normalizedAttachmentUrl || null, userId || null, Boolean(normalizedAttachmentUrl), executiveAssignee.rows[0].id, task.id]);
-
-            await recordWorkflowTransition({
-                entityType: 'workflow_task',
-                entityId: id,
-                oldState: oldTaskState,
-                newState: 'manager_submitted',
-                changedBy: userId,
-                note: comment || 'Department manager sent CEO contact progress',
-                metadata: {
-                    actorRole: userRole,
-                    ceoContactTask: true,
-                    attachmentUrl: resolvedAttachmentUrl || null,
-                },
-            });
-
-            void recordActivity({
-                actorId: userId,
-                action: 'submit',
-                entityType: 'workflow_task',
-                entityId: id,
-                summary: 'sent CEO contact progress back to CEO',
-                metadata: {
-                    hasComment: Boolean(comment),
-                    hasAttachment: Boolean(resolvedAttachmentUrl),
-                },
-                sourcePath: '/api/workflow-tasks/:id/manager-validate',
-                requestMethod: 'POST',
-            }).catch((err) => console.error('Activity log failed:', err));
-
-            res.status(200).json({
-                message: 'CEO contact progress sent back to CEO',
-                data: taskResult.rows[0],
-            });
-            return;
-        }
 
         const projectScopeResult = await pool.query(
             `SELECT LOWER(COALESCE(department_type, '')) AS department_type
@@ -1078,7 +832,7 @@ export const managerValidateWorkflowTask = async (req: AuthRequest, res: Respons
             action: 'validate',
             entityType: 'workflow_task',
             entityId: id,
-            summary: 'validated task and moved to super admin review',
+            summary: 'validated task and moved to CEO review',
             metadata: {
                 projectId: task.investment_project_id,
                 hasComment: Boolean(comment),
@@ -1088,7 +842,7 @@ export const managerValidateWorkflowTask = async (req: AuthRequest, res: Respons
         }).catch((err) => console.error('Activity log failed:', err));
 
         res.status(200).json({
-            message: 'Task validated and moved to super admin review',
+            message: 'Task validated and moved to CEO review',
             data: taskResult.rows[0],
         });
     } catch (error: any) {
@@ -1109,6 +863,7 @@ export const reviewWorkflowTask = async (req: AuthRequest, res: Response): Promi
         };
         const userRole = req.user?.role;
         const userId = req.user?.id;
+        const isExecutiveReviewer = userRole === 'super_admin' || userRole === 'ceo';
 
         if (!userId || !userRole) {
             res.status(401).json({ error: 'Unauthorized' });
@@ -1139,37 +894,27 @@ export const reviewWorkflowTask = async (req: AuthRequest, res: Response): Promi
         const isGenericTask = task.flow_type === 'request' || task.flow_type === 'ceo_contact' || !task.investment_project_id;
 
         if (isGenericTask) {
-            if (task.flow_type === 'ceo_contact' && !(normalizedDecision === 'approved' || normalizedDecision === 'rejected')) {
-                res.status(400).json({ error: 'decision must be approved or rejected for CEO contact tasks' });
-                return;
-            }
-
-            if (task.flow_type !== 'ceo_contact' && !(normalizedDecision === 'approved' || normalizedDecision === 'rejected')) {
+            if (!(normalizedDecision === 'approved' || normalizedDecision === 'rejected')) {
                 res.status(400).json({ error: 'decision must be approved or rejected for request and CEO contact tasks' });
                 return;
             }
 
-            if (task.flow_type === 'ceo_contact' && userRole !== 'super_admin' && userRole !== 'ceo') {
-                res.status(403).json({ error: 'Only super admin or CEO can review CEO contact tasks' });
-                return;
-            }
-
-            if (task.flow_type === 'ceo_contact') {
-                if (task.status !== 'manager_submitted') {
-                    res.status(409).json({ error: 'CEO contact task must be manager submitted before CEO review' });
-                    return;
-                }
-            } else if (!(task.status === 'assigned' || task.status === 'manager_queue' || task.status === 'employee_submitted')) {
+            if (!(task.status === 'assigned' || task.status === 'manager_queue')) {
                 res.status(409).json({ error: 'Task must be assigned before review' });
                 return;
             }
 
-            if (task.flow_type === 'request' && !(userRole === 'department_manager' || userRole === 'super_admin')) {
-                res.status(403).json({ error: 'Only department managers or super admin can review request tasks' });
+            if (task.flow_type === 'ceo_contact' && !isExecutiveReviewer) {
+                res.status(403).json({ error: 'Only super admin or CEO can review CEO contact tasks' });
                 return;
             }
 
-            if (userRole !== 'super_admin' && userRole !== 'ceo') {
+            if (task.flow_type === 'request' && !(userRole === 'department_manager' || isExecutiveReviewer)) {
+                res.status(403).json({ error: 'Only department managers, super admin, or CEO can review request tasks' });
+                return;
+            }
+
+            if (!isExecutiveReviewer) {
                 const actorDepartment = normalizeDepartment(req.user?.department);
                 if (!actorDepartment) {
                     res.status(403).json({ error: 'Department is required for this action' });
@@ -1183,59 +928,16 @@ export const reviewWorkflowTask = async (req: AuthRequest, res: Response): Promi
                 }
             }
 
-            const nextStatus = task.flow_type === 'request' && normalizedDecision === 'approved'
-                ? 'pending_requester_decision'
-                : (task.flow_type === 'ceo_contact' && normalizedDecision === 'rejected')
-                    ? 'ceo_rejected'
-                : (normalizedDecision as 'approved' | 'rejected');
-            const noteColumn = userRole === 'super_admin' || userRole === 'ceo' ? 'super_admin_comment' : 'manager_note';
-            const normalizedAttachmentUrl = String((req.body as { attachmentUrl?: string }).attachmentUrl || '').trim();
-            if (normalizedAttachmentUrl && !isValidHttpUrl(normalizedAttachmentUrl)) {
-                res.status(400).json({ error: 'attachmentUrl must be a valid http/https URL' });
-                return;
-            }
-
-            let resolvedAttachment: string | null = null;
-            let usesNewUpload = false;
-            if (task.flow_type === 'request') {
-                try {
-                    const resolved = resolveRequestAttachment(task, normalizedAttachmentUrl);
-                    resolvedAttachment = resolved.resolvedAttachment;
-                    usesNewUpload = resolved.usesNewUpload;
-                } catch (attachmentError: any) {
-                    res.status(409).json({ error: attachmentError.message });
-                    return;
-                }
-            } else if (task.flow_type === 'ceo_contact') {
-                resolvedAttachment = normalizedAttachmentUrl || task.attachment_url || task.manager_attachment_url || task.employee_attachment_url;
-                usesNewUpload = Boolean(normalizedAttachmentUrl);
-            }
-
-            const updatedTask = task.flow_type === 'request'
-                ? await pool.query(`
-                    UPDATE project_workflow_tasks
-                    SET status = $1,
-                        ${noteColumn} = $2,
-                        manager_attachment_url = COALESCE($3::text, manager_attachment_url),
-                        attachment_url = COALESCE($3::text, attachment_url),
-                        attachment_uploaded_by = CASE WHEN $4::boolean THEN $5::uuid ELSE attachment_uploaded_by END,
-                        attachment_uploaded_at = CASE WHEN $4 THEN CURRENT_TIMESTAMP ELSE attachment_uploaded_at END,
-                        updated_at = CURRENT_TIMESTAMP
-                    WHERE id = $6
-                    RETURNING *
-                `, [nextStatus, comment || null, resolvedAttachment, usesNewUpload, userId, id])
-                : await pool.query(`
-                    UPDATE project_workflow_tasks
-                    SET status = $1,
-                        ${noteColumn} = $2,
-                        manager_attachment_url = CASE WHEN $3::text IS NOT NULL THEN $3::text ELSE manager_attachment_url END,
-                        attachment_url = CASE WHEN $3::text IS NOT NULL THEN $3::text ELSE attachment_url END,
-                        attachment_uploaded_by = CASE WHEN $4::boolean THEN $5::uuid ELSE attachment_uploaded_by END,
-                        attachment_uploaded_at = CASE WHEN $4 THEN CURRENT_TIMESTAMP ELSE attachment_uploaded_at END,
-                        updated_at = CURRENT_TIMESTAMP
-                    WHERE id = $6
-                    RETURNING *
-                `, [nextStatus, comment || null, resolvedAttachment, usesNewUpload, userId, id]);
+            const nextStatus = normalizedDecision as 'approved' | 'rejected';
+            const noteColumn = isExecutiveReviewer ? 'super_admin_comment' : 'manager_note';
+            const updatedTask = await pool.query(`
+                UPDATE project_workflow_tasks
+                SET status = $1,
+                    ${noteColumn} = $2,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id = $3
+                RETURNING *
+            `, [nextStatus, comment || null, id]);
 
             await recordWorkflowTransition({
                 entityType: 'workflow_task',
@@ -1247,9 +949,6 @@ export const reviewWorkflowTask = async (req: AuthRequest, res: Response): Promi
                 metadata: {
                     taskType: task.flow_type,
                     actorRole: userRole,
-                    requiresRequesterDecision: task.flow_type === 'request' && normalizedDecision === 'approved',
-                    ceoContactTask: task.flow_type === 'ceo_contact',
-                    attachmentUrl: resolvedAttachment || null,
                 },
             });
 
@@ -1258,30 +957,23 @@ export const reviewWorkflowTask = async (req: AuthRequest, res: Response): Promi
                 action: normalizedDecision === 'approved' ? 'approve' : 'reject',
                 entityType: 'workflow_task',
                 entityId: id,
-                summary: task.flow_type === 'request' && normalizedDecision === 'approved'
-                    ? 'submitted request response for requester decision'
-                    : `${normalizedDecision === 'approved' ? 'approved' : 'rejected'} ${task.flow_type.replace('_', ' ')} task`,
+                summary: `${normalizedDecision === 'approved' ? 'approved' : 'rejected'} ${task.flow_type.replace('_', ' ')} task`,
                 metadata: {
                     taskType: task.flow_type,
                     hasComment: Boolean(comment),
-                    hasAttachment: Boolean(resolvedAttachment),
                 },
                 sourcePath: '/api/workflow-tasks/:id/review',
                 requestMethod: 'POST',
             }).catch((err) => console.error('Activity log failed:', err));
 
             res.status(200).json({
-                message: nextStatus === 'pending_requester_decision'
-                    ? 'Response submitted and pending requester decision'
-                    : nextStatus === 'ceo_rejected'
-                        ? 'CEO contact rejected and ready for forwarding again'
-                    : `Task ${nextStatus} successfully`,
+                message: `Task ${nextStatus} successfully`,
                 data: updatedTask.rows[0],
             });
             return;
         }
 
-        if (userRole !== 'super_admin' && userRole !== 'ceo') {
+        if (!isExecutiveReviewer) {
             res.status(403).json({ error: 'Only super admin or CEO can review workflow tasks' });
             return;
         }
@@ -1290,11 +982,6 @@ export const reviewWorkflowTask = async (req: AuthRequest, res: Response): Promi
             const normalizedBranch = normalizedDecision === 'contract' ? 'contract' : 'documents';
             if (!assignedToUserId) {
                 res.status(400).json({ error: 'assignedToUserId is required for contract/document routing' });
-                return;
-            }
-
-            if (!task.investment_project_id) {
-                res.status(409).json({ error: 'Project-linked task is required for contract/document routing' });
                 return;
             }
 
@@ -1320,33 +1007,6 @@ export const reviewWorkflowTask = async (req: AuthRequest, res: Response): Promi
                 return;
             }
 
-            const projectResult = await pool.query(
-                `SELECT project_code, project_name, city, district, google_location, contract_type,
-                        owner_name, owner_contact_no, id_no, national_address, email, owner_type, order_date
-                 FROM investment_projects
-                 WHERE id = $1
-                 LIMIT 1`,
-                [task.investment_project_id],
-            );
-            const project = projectResult.rows[0] || {};
-            const stationCodeFromProject = String(project.project_code || '').trim();
-
-            if (!stationCodeFromProject) {
-                res.status(409).json({ error: 'Unable to resolve station code from project before routing.' });
-                return;
-            }
-
-            await upsertStationFromProject(task.investment_project_id, userId);
-
-            const stationExists = await pool.query(
-                'SELECT 1 FROM station_information WHERE station_code = $1 LIMIT 1',
-                [stationCodeFromProject],
-            );
-            if (!stationExists.rows.length) {
-                res.status(409).json({ error: `Station ${stationCodeFromProject} does not exist after routing preparation.` });
-                return;
-            }
-
             const updatedTask = await pool.query(`
                 UPDATE project_workflow_tasks
                 SET status = 'assigned',
@@ -1355,34 +1015,10 @@ export const reviewWorkflowTask = async (req: AuthRequest, res: Response): Promi
                     assigned_by = $3,
                     target_department = $4,
                     super_admin_comment = $5,
-                    metadata = COALESCE(metadata, '{}'::jsonb) || jsonb_build_object(
-                        'stationCode', to_jsonb($7::text),
-                        'contractDefaults', $8::jsonb
-                    ),
                     updated_at = CURRENT_TIMESTAMP
                 WHERE id = $6
                 RETURNING *
-            `, [
-                normalizedBranch,
-                assignedToUserId,
-                userId,
-                resolvedTargetDepartment,
-                comment || null,
-                id,
-                stationCodeFromProject,
-                JSON.stringify({
-                    contractType: String(project.contract_type || '').trim() || null,
-                    contractSignatureLocation: String(project.google_location || project.city || project.project_name || '').trim() || null,
-                    contractSignatureDate: project.order_date ? String(project.order_date).slice(0, 10) : null,
-                    lessorName: String(project.owner_name || '').trim() || null,
-                    idNo: String(project.id_no || '').trim() || null,
-                    mobileNo: String(project.owner_contact_no || '').trim() || null,
-                    email: String(project.email || '').trim() || null,
-                    tenantName: String(project.project_name || '').trim() || null,
-                    tenantMobileNo: String(project.owner_contact_no || '').trim() || null,
-                    tenantEmail: String(project.email || '').trim() || null,
-                }),
-            ]);
+            `, [normalizedBranch, assignedToUserId, userId, resolvedTargetDepartment, comment || null, id]);
 
             await pool.query(`
                 UPDATE investment_projects
@@ -1400,23 +1036,11 @@ export const reviewWorkflowTask = async (req: AuthRequest, res: Response): Promi
                 oldState: oldTaskState,
                 newState: 'assigned',
                 changedBy: userId,
-                note: comment || `Super admin routed task to ${normalizedBranch} branch`,
+                note: comment || `Executive routed task to ${normalizedBranch} branch`,
                 metadata: {
                     branch: normalizedBranch,
                     assignedToUserId,
                     targetDepartment: resolvedTargetDepartment,
-                    contractDefaults: {
-                        contractType: String(project.contract_type || '').trim() || null,
-                        contractSignatureLocation: String(project.google_location || project.city || project.project_name || '').trim() || null,
-                        contractSignatureDate: project.order_date ? String(project.order_date).slice(0, 10) : null,
-                        lessorName: String(project.owner_name || '').trim() || null,
-                        idNo: String(project.id_no || '').trim() || null,
-                        mobileNo: String(project.owner_contact_no || '').trim() || null,
-                        email: String(project.email || '').trim() || null,
-                        tenantName: String(project.project_name || '').trim() || null,
-                        tenantMobileNo: String(project.owner_contact_no || '').trim() || null,
-                        tenantEmail: String(project.email || '').trim() || null,
-                    },
                 },
             });
 
@@ -1427,59 +1051,8 @@ export const reviewWorkflowTask = async (req: AuthRequest, res: Response): Promi
             return;
         }
 
-        const isCeoContactTaskFlow = task.flow_type === 'ceo_contact';
-        if (isCeoContactTaskFlow) {
-            const updatedTask = await pool.query(`
-                UPDATE project_workflow_tasks
-                SET status = $1,
-                    super_admin_comment = $2,
-                    updated_at = CURRENT_TIMESTAMP
-                WHERE id = $3
-                RETURNING *
-            `, [normalizedDecision === 'approved' ? 'approved' : 'ceo_rejected', comment || null, id]);
-
-            const nextState = normalizedDecision === 'approved' ? 'approved' : 'ceo_rejected';
-            await recordWorkflowTransition({
-                entityType: 'workflow_task',
-                entityId: id,
-                oldState: oldTaskState,
-                newState: nextState,
-                changedBy: userId,
-                note: comment || `CEO contact ${nextState}`,
-                metadata: {
-                    taskType: task.flow_type,
-                    actorRole: userRole,
-                },
-            });
-
-            void recordActivity({
-                actorId: userId,
-                action: normalizedDecision === 'approved' ? 'approve' : 'reject',
-                entityType: 'workflow_task',
-                entityId: id,
-                summary: normalizedDecision === 'approved' ? 'approved CEO contact task' : 'rejected CEO contact task for re-forwarding',
-                metadata: {
-                    taskType: task.flow_type,
-                    hasComment: Boolean(comment),
-                },
-                sourcePath: '/api/workflow-tasks/:id/review',
-                requestMethod: 'POST',
-            }).catch((err) => console.error('Activity log failed:', err));
-
-            res.status(200).json({
-                message: nextState === 'approved' ? 'CEO contact approved successfully' : 'CEO contact rejected and can be forwarded again',
-                data: updatedTask.rows[0],
-            });
-            return;
-        }
-
-        const isBranchTask = Boolean(task.workflow_path);
-        const canFinalize = isBranchTask
-            ? (task.status === 'assigned' || task.status === 'manager_submitted' || task.status === 'under_super_admin_review')
-            : (task.status === 'manager_submitted' || task.status === 'under_super_admin_review');
-
-        if (!canFinalize) {
-            res.status(409).json({ error: 'Task must be submitted by a manager or be under super admin review before final decision' });
+        if (!(task.status === 'manager_submitted' || task.status === 'under_super_admin_review')) {
+            res.status(409).json({ error: 'Task must be submitted by a manager or be under CEO review before final decision' });
             return;
         }
 
@@ -1561,105 +1134,10 @@ export const reviewWorkflowTask = async (req: AuthRequest, res: Response): Promi
     }
 };
 
-export const submitRequesterDecision = async (req: AuthRequest, res: Response): Promise<void> => {
-    try {
-        await ensureWorkflowSchema();
-
-        const { id } = req.params;
-        const { decision, comment } = req.body as { decision?: string; comment?: string };
-        const userId = req.user?.id;
-
-        if (!userId) {
-            res.status(401).json({ error: 'Unauthorized' });
-            return;
-        }
-
-        const normalizedDecision = String(decision || '').trim().toLowerCase();
-        if (!(normalizedDecision === 'accept' || normalizedDecision === 'accepted' || normalizedDecision === 'decline' || normalizedDecision === 'declined')) {
-            res.status(400).json({ error: 'decision must be accept or decline' });
-            return;
-        }
-
-        const taskLookup = await pool.query(
-            `SELECT * FROM project_workflow_tasks WHERE id = $1 LIMIT 1`,
-            [id],
-        );
-
-        if (!taskLookup.rows.length) {
-            res.status(404).json({ error: 'Task not found' });
-            return;
-        }
-
-        const task = taskLookup.rows[0];
-        if (!isRequestTask(task)) {
-            res.status(409).json({ error: 'Requester decision is only available for request tasks' });
-            return;
-        }
-
-        if (task.status !== 'pending_requester_decision') {
-            res.status(409).json({ error: 'Task is not ready for requester decision' });
-            return;
-        }
-
-        const metadata = task.metadata && typeof task.metadata === 'object' ? task.metadata : {};
-        const requesterId = String((metadata as any)?.requester?.id || task.created_by || '').trim();
-        if (!requesterId || requesterId !== userId) {
-            res.status(403).json({ error: 'Only the original requester can submit this decision' });
-            return;
-        }
-
-        const nextStatus = normalizedDecision.startsWith('accept') ? 'requester_accepted' : 'requester_declined';
-        const updated = await pool.query(
-            `
-                UPDATE project_workflow_tasks
-                SET status = $1,
-                    metadata = jsonb_set(
-                        jsonb_set(COALESCE(metadata, '{}'::jsonb), '{requesterDecision}', to_jsonb($2::text), true),
-                        '{requesterDecisionComment}',
-                        to_jsonb($3::text),
-                        true
-                    ),
-                    updated_at = CURRENT_TIMESTAMP
-                WHERE id = $4
-                RETURNING *
-            `,
-            [nextStatus, nextStatus, String(comment || '').trim(), id],
-        );
-
-        await recordWorkflowTransition({
-            entityType: 'workflow_task',
-            entityId: id,
-            oldState: task.status,
-            newState: nextStatus,
-            changedBy: userId,
-            note: String(comment || '').trim() || `Requester ${nextStatus.replace('requester_', '').replace('_', ' ')}`,
-            metadata: {
-                taskType: 'request',
-                requesterDecision: nextStatus,
-            },
-        });
-
-        void recordActivity({
-            actorId: userId,
-            action: normalizedDecision.startsWith('accept') ? 'approve' : 'reject',
-            entityType: 'workflow_task',
-            entityId: id,
-            summary: normalizedDecision.startsWith('accept') ? 'requester accepted request response' : 'requester declined request response',
-            metadata: {
-                nextStatus,
-                hasComment: Boolean(String(comment || '').trim()),
-            },
-            sourcePath: '/api/workflow-tasks/:id/requester-decision',
-            requestMethod: 'POST',
-        }).catch((err) => console.error('Activity log failed:', err));
-
-        res.status(200).json({
-            message: normalizedDecision.startsWith('accept') ? 'Request accepted successfully' : 'Request declined successfully',
-            data: updated.rows[0],
-        });
-    } catch (error: any) {
-        res.status(500).json({ error: 'Failed to submit requester decision', details: error.message });
-    }
+// Backwards-compatible stub: older routes expect this handler.
+// The current workflow uses `reviewWorkflowTask` for decisions; keep this endpoint non-breaking.
+export const submitRequesterDecision = async (_req: AuthRequest, res: Response): Promise<void> => {
+    res.status(501).json({ error: 'Requester decision endpoint is not implemented. Use /tasks/:id/review instead.' });
 };
 
 export const getWorkflowTaskHistory = async (req: AuthRequest, res: Response): Promise<void> => {

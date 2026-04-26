@@ -144,6 +144,19 @@ export const getAllStationInformation = async (req: Request, res: Response): Pro
         const conditions: string[] = [];
         const params: unknown[] = [];
 
+        // Hide stations that are still in contract/document workflow (not CEO approved yet).
+        // Station rows can exist early due to contract/document bootstrapping but should not
+        // appear in station views until final CEO approval.
+        conditions.push(`
+            NOT EXISTS (
+                SELECT 1
+                FROM investment_projects p
+                WHERE COALESCE(NULLIF(p.station_code, ''), p.project_code) = station_information.station_code
+                  AND p.workflow_path IN ('contract', 'documents')
+                  AND COALESCE(p.review_status, '') <> 'Approved'
+            )
+        `);
+
         if (userType === 'external' && userId) {
             const assignedCodes = await UserModel.getStationCodesByUserId(userId);
             if (assignedCodes.length === 0) {
@@ -223,7 +236,14 @@ export const getStationInformationByCode = async (req: Request, res: Response): 
     try {
         const query = `
             SELECT * FROM station_information 
-            WHERE id::text = $1 OR station_code = $1
+            WHERE (id::text = $1 OR station_code = $1)
+              AND NOT EXISTS (
+                SELECT 1
+                FROM investment_projects p
+                WHERE COALESCE(NULLIF(p.station_code, ''), p.project_code) = station_information.station_code
+                  AND p.workflow_path IN ('contract', 'documents')
+                  AND COALESCE(p.review_status, '') <> 'Approved'
+              )
         `;
 
         const result = await pool.query(query, [stationCode]);
