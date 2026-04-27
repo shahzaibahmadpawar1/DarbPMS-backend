@@ -4,6 +4,41 @@ import { AuthRequest } from '../types';
 import { ensureWorkflowSchema, recordWorkflowTransition } from '../utils/workflow';
 import { ensureFeasibilitySchema, FEASIBILITY_REVIEW_DEPARTMENTS, type FeasibilityReviewDepartment } from '../utils/feasibility';
 
+let investmentLifecycleSchemaReady = false;
+
+const ensureInvestmentLifecycleSchema = async (): Promise<void> => {
+    if (investmentLifecycleSchemaReady) {
+        return;
+    }
+
+    await pool.query(`
+        ALTER TABLE investment_projects
+        ADD COLUMN IF NOT EXISTS is_submitted BOOLEAN NOT NULL DEFAULT TRUE;
+    `);
+    await pool.query(`
+        ALTER TABLE investment_projects
+        ADD COLUMN IF NOT EXISTS workflow_path VARCHAR(50);
+    `);
+    await pool.query(`
+        ALTER TABLE investment_projects
+        ADD COLUMN IF NOT EXISTS submitted_at TIMESTAMP WITH TIME ZONE;
+    `);
+    await pool.query(`
+        ALTER TABLE investment_projects
+        ADD COLUMN IF NOT EXISTS submitted_by UUID REFERENCES users(id) ON DELETE SET NULL;
+    `);
+    await pool.query(`
+        ALTER TABLE investment_projects
+        ADD COLUMN IF NOT EXISTS last_saved_at TIMESTAMP WITH TIME ZONE;
+    `);
+    await pool.query(`
+        ALTER TABLE investment_projects
+        ADD COLUMN IF NOT EXISTS last_saved_by UUID REFERENCES users(id) ON DELETE SET NULL;
+    `);
+
+    investmentLifecycleSchemaReady = true;
+};
+
 const normalizeDepartmentType = (value: unknown): 'investment' | 'franchise' | null => {
     const normalized = String(value || '').trim().toLowerCase();
     if (normalized === 'investment') return 'investment';
@@ -26,6 +61,7 @@ export class FeasibilityController {
         try {
             await ensureWorkflowSchema();
             await ensureFeasibilitySchema();
+            await ensureInvestmentLifecycleSchema();
 
             const actorId = req.user?.id;
             if (!actorId) {
@@ -99,6 +135,9 @@ export class FeasibilityController {
                 }
             }
 
+            // NOTE: `review_status` is constrained in many deployments to:
+            // ('Pending Review','Validated','Approved','Rejected').
+            // We store feasibility state via request_type + feasibility tasks until CEO approval.
             const inserted = await pool.query(
                 `
                     INSERT INTO investment_projects (
@@ -159,7 +198,7 @@ export class FeasibilityController {
                     nationalAddress || null,
                     email || null,
                     ownerType,
-                    'Feasibility Pending',
+                    'Pending Review',
                     actorId,
                 ],
             );
@@ -170,12 +209,13 @@ export class FeasibilityController {
                 entityType: 'investment_project',
                 entityId: project.id,
                 oldState: null,
-                newState: 'Feasibility Pending',
+                newState: 'Pending Review',
                 changedBy: actorId,
                 note: 'Feasibility study submitted',
                 metadata: {
                     requestType,
                     departmentType,
+                    feasibilityStage: 'manager_review',
                 },
             });
 
