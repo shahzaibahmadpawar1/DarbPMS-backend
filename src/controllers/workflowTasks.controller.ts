@@ -1402,7 +1402,13 @@ export const createInitialReviewTaskForProject = async (
     }
 
     const existing = await pool.query(
-        'SELECT id FROM project_workflow_tasks WHERE investment_project_id = $1 LIMIT 1',
+        // For feasibility submissions, a shared feasibility task already exists.
+        // We only want to prevent duplicates of the *standard* (non-feasibility) workflow.
+        `SELECT id
+         FROM project_workflow_tasks
+         WHERE investment_project_id = $1
+           AND flow_type <> 'feasibility'
+         LIMIT 1`,
         [projectId],
     );
     if (existing.rows.length) {
