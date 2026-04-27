@@ -267,8 +267,19 @@ const buildDashboardStationQuery = (
                 SELECT 1
                 FROM investment_projects p
                 WHERE COALESCE(NULLIF(p.station_code, ''), p.project_code) = station_information.station_code
-                  AND p.workflow_path IN ('contract', 'documents')
-                  AND COALESCE(p.review_status, '') <> 'Approved'
+                  AND (
+                    (
+                      p.workflow_path IN ('contract', 'documents')
+                      AND COALESCE(p.review_status, '') <> 'Approved'
+                    )
+                    OR EXISTS (
+                      SELECT 1
+                      FROM project_workflow_tasks t
+                      WHERE t.investment_project_id = p.id
+                        AND t.flow_type IN ('contract', 'documents')
+                        AND t.status IN ('manager_queue', 'assigned', 'employee_submitted', 'manager_submitted', 'under_super_admin_review')
+                    )
+                  )
             )
         `);
 
@@ -673,8 +684,19 @@ app.get('/api/dashboard/stats', authenticateToken, async (req: Request, res: Res
                 SELECT 1
                 FROM investment_projects p
                 WHERE COALESCE(NULLIF(p.station_code, ''), p.project_code) = station_information.station_code
-                  AND p.workflow_path IN ('contract', 'documents')
-                  AND COALESCE(p.review_status, '') <> 'Approved'
+                  AND (
+                    (
+                      p.workflow_path IN ('contract', 'documents')
+                      AND COALESCE(p.review_status, '') <> 'Approved'
+                    )
+                    OR EXISTS (
+                      SELECT 1
+                      FROM project_workflow_tasks t
+                      WHERE t.investment_project_id = p.id
+                        AND t.flow_type IN ('contract', 'documents')
+                        AND t.status IN ('manager_queue', 'assigned', 'employee_submitted', 'manager_submitted', 'under_super_admin_review')
+                    )
+                  )
             )
         `;
 

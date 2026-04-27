@@ -261,14 +261,6 @@ export const getWorkflowTasks = async (req: AuthRequest, res: Response): Promise
             userRole !== 'super_admin'
             && userRole !== 'ceo'
             && normalizeDepartment(userDepartment) !== 'project';
-        const investmentProjectTaskVisibilityClause = restrictInvestmentProjectTasks
-            ? `
-                AND NOT (
-                    t.investment_project_id IS NOT NULL
-                    AND LOWER(COALESCE(p.department_type, '')) IN ('investment', 'franchise', 'frenchise')
-                )
-            `
-            : '';
 
         if (userRole !== 'super_admin' && userRole !== 'ceo') {
             const department = normalizeDepartment(userDepartment);
@@ -295,12 +287,36 @@ export const getWorkflowTasks = async (req: AuthRequest, res: Response): Promise
                     )
                 `;
                 params.push(department, userId);
-                query += investmentProjectTaskVisibilityClause;
+                if (restrictInvestmentProjectTasks) {
+                    query += `
+                        AND NOT (
+                            t.investment_project_id IS NOT NULL
+                            AND LOWER(COALESCE(p.department_type, '')) IN ('investment', 'franchise', 'frenchise')
+                            AND NOT (
+                                t.assigned_to = $2
+                                OR t.created_by = $2
+                                OR t.origin_department = $1
+                                OR t.target_department = $1
+                            )
+                        )
+                    `;
+                }
             } else {
                 // Supervisors/employees should only see tasks explicitly assigned to them.
                 query += ' WHERE (t.assigned_to = $1 OR t.created_by = $1)';
                 params.push(userId);
-                query += investmentProjectTaskVisibilityClause;
+                if (restrictInvestmentProjectTasks) {
+                    query += `
+                        AND NOT (
+                            t.investment_project_id IS NOT NULL
+                            AND LOWER(COALESCE(p.department_type, '')) IN ('investment', 'franchise', 'frenchise')
+                            AND NOT (
+                                t.assigned_to = $1
+                                OR t.created_by = $1
+                            )
+                        )
+                    `;
+                }
             }
         }
 
