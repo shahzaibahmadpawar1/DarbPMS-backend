@@ -159,7 +159,31 @@ const normalizeBootstrapText = (value: unknown): string | null => {
 
 const toIsoDate = (value: unknown): string | null => {
     if (!value) return null;
-    return String(value).slice(0, 10) || null;
+    const raw = String(value).trim();
+    if (!raw) return null;
+
+    // If already ISO-ish (YYYY-MM-DD...), keep it.
+    if (/^\d{4}-\d{2}-\d{2}/.test(raw)) {
+        return raw.slice(0, 10);
+    }
+
+    // Try parsing full date strings (e.g. RFC/ISO/locale variants).
+    const parsed = new Date(raw);
+    if (!Number.isNaN(parsed.getTime())) {
+        return parsed.toISOString().slice(0, 10);
+    }
+
+    // Handle strings like "Tue Apr 28" (missing year) by assuming current year.
+    const missingYearMatch = raw.match(/^(?:[A-Za-z]{3}\s+)?([A-Za-z]{3}\s+\d{1,2})$/);
+    if (missingYearMatch) {
+        const withYear = `${missingYearMatch[1]} ${new Date().getFullYear()}`;
+        const parsedWithYear = new Date(withYear);
+        if (!Number.isNaN(parsedWithYear.getTime())) {
+            return parsedWithYear.toISOString().slice(0, 10);
+        }
+    }
+
+    return null;
 };
 
 const hydrateContractDraftRow = async (contractId: string, defaults: ContractBootstrapDefaults): Promise<any> => {
