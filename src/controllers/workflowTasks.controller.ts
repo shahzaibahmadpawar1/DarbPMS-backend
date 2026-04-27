@@ -321,6 +321,7 @@ export const getWorkflowTasks = async (req: AuthRequest, res: Response): Promise
                         AND NOT (
                             t.investment_project_id IS NOT NULL
                             AND LOWER(COALESCE(p.department_type, '')) IN ('investment', 'franchise', 'frenchise')
+                            AND t.flow_type <> 'feasibility'
                             AND NOT (
                                 t.assigned_to = $2
                                 OR t.created_by = $2
@@ -355,6 +356,7 @@ export const getWorkflowTasks = async (req: AuthRequest, res: Response): Promise
                         AND NOT (
                             t.investment_project_id IS NOT NULL
                             AND LOWER(COALESCE(p.department_type, '')) IN ('investment', 'franchise', 'frenchise')
+                            AND t.flow_type <> 'feasibility'
                             AND NOT (
                                 t.assigned_to = $1
                                 OR t.created_by = $1
