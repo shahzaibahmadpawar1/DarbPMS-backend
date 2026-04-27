@@ -1,6 +1,6 @@
 import { Request, Response } from 'express';
 import pool from '../config/database';
-import { createInitialReviewTaskForProject } from './workflowTasks.controller';
+import { createInitialReviewTaskForProject, upsertStationFromProject } from './workflowTasks.controller';
 import { isSchemaCompatibilityError } from '../utils/dbErrors';
 import { recordActivity } from '../utils/activity';
 
@@ -194,6 +194,7 @@ export const createInvestmentProject = async (req: Request, res: Response): Prom
 
         if (userId && shouldSubmit) {
             await createInitialReviewTaskForProject(result.rows[0].id, userId);
+            await upsertStationFromProject(result.rows[0].id, userId);
         }
 
         // Log activity
@@ -392,6 +393,7 @@ export const updateInvestmentProject = async (req: Request, res: Response): Prom
 
         if (shouldSubmit && userId) {
             await createInitialReviewTaskForProject(id, userId);
+            await upsertStationFromProject(id, userId);
         }
 
         // Log activity

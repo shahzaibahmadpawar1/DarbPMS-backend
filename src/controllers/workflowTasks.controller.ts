@@ -178,7 +178,7 @@ export const createContractRequestTask = async (req: AuthRequest, res: Response)
     }
 };
 
-const upsertStationFromProject = async (projectId: string, userId: string): Promise<void> => {
+export const upsertStationFromProject = async (projectId: string, userId: string): Promise<void> => {
     const projectResult = await pool.query('SELECT * FROM investment_projects WHERE id = $1 LIMIT 1', [projectId]);
     if (!projectResult.rows.length) {
         return;
