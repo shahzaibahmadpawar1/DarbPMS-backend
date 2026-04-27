@@ -257,7 +257,10 @@ export const getWorkflowTasks = async (req: AuthRequest, res: Response): Promise
             LEFT JOIN users acu ON acu.id = t.created_by
         `;
         const params: unknown[] = [];
-        const restrictInvestmentProjectTasks = userRole !== 'super_admin' && normalizeDepartment(userDepartment) !== 'project';
+        const restrictInvestmentProjectTasks =
+            userRole !== 'super_admin'
+            && userRole !== 'ceo'
+            && normalizeDepartment(userDepartment) !== 'project';
         const investmentProjectTaskVisibilityClause = restrictInvestmentProjectTasks
             ? `
                 AND NOT (
@@ -267,7 +270,7 @@ export const getWorkflowTasks = async (req: AuthRequest, res: Response): Promise
             `
             : '';
 
-        if (userRole !== 'super_admin') {
+        if (userRole !== 'super_admin' && userRole !== 'ceo') {
             const department = normalizeDepartment(userDepartment);
             if (!department && userRole === 'department_manager') {
                 throw new Error('Department is required for this action');
@@ -348,8 +351,8 @@ export const getAssignableUsers = async (req: AuthRequest, res: Response): Promi
             return;
         }
 
-        if (!(userRole === 'department_manager' || userRole === 'super_admin' || userRole === 'supervisor')) {
-            res.status(403).json({ error: 'Only department managers, supervisors, or super admin can view assignable users' });
+        if (!(userRole === 'department_manager' || userRole === 'super_admin' || userRole === 'ceo' || userRole === 'supervisor')) {
+            res.status(403).json({ error: 'Only department managers, supervisors, super admin, or CEO can view assignable users' });
             return;
         }
 
@@ -392,8 +395,8 @@ export const assignWorkflowTask = async (req: AuthRequest, res: Response): Promi
             return;
         }
 
-        if (!(actorRole === 'department_manager' || actorRole === 'super_admin' || actorRole === 'supervisor')) {
-            res.status(403).json({ error: 'Only department managers, supervisors, or super admin can assign tasks' });
+        if (!(actorRole === 'department_manager' || actorRole === 'super_admin' || actorRole === 'ceo' || actorRole === 'supervisor')) {
+            res.status(403).json({ error: 'Only department managers, supervisors, super admin, or CEO can assign tasks' });
             return;
         }
 
@@ -864,6 +867,7 @@ export const reviewWorkflowTask = async (req: AuthRequest, res: Response): Promi
         const userRole = req.user?.role;
         const userId = req.user?.id;
         const isExecutiveReviewer = userRole === 'super_admin' || userRole === 'ceo';
+        const isCeoReviewer = userRole === 'ceo';
 
         if (!userId || !userRole) {
             res.status(401).json({ error: 'Unauthorized' });
@@ -975,6 +979,12 @@ export const reviewWorkflowTask = async (req: AuthRequest, res: Response): Promi
 
         if (!isExecutiveReviewer) {
             res.status(403).json({ error: 'Only super admin or CEO can review workflow tasks' });
+            return;
+        }
+
+        const isExecutiveStage = task.status === 'under_super_admin_review' || task.status === 'manager_submitted';
+        if (isCeoReviewer && !isExecutiveStage) {
+            res.status(403).json({ error: 'CEO can only approve, reject, or delegate once the task reaches executive review stage' });
             return;
         }
 
