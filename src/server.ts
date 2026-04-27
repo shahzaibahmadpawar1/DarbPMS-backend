@@ -683,8 +683,16 @@ app.get('/api/dashboard/stats', authenticateToken, async (req: Request, res: Res
             NOT EXISTS (
                 SELECT 1
                 FROM investment_projects p
-                WHERE COALESCE(NULLIF(p.station_code, ''), p.project_code) = station_information.station_code
-                  AND COALESCE(p.review_status, '') <> 'Approved'
+                WHERE COALESCE(p.review_status, '') <> 'Approved'
+                  AND (
+                    COALESCE(NULLIF(p.station_code, ''), p.project_code) = station_information.station_code
+                    OR EXISTS (
+                      SELECT 1
+                      FROM project_workflow_tasks t
+                      WHERE t.investment_project_id = p.id
+                        AND COALESCE(t.metadata->>'stationCode', '') = station_information.station_code
+                    )
+                  )
             )
         `;
 
