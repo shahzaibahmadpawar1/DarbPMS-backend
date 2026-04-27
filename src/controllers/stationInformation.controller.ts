@@ -144,27 +144,14 @@ export const getAllStationInformation = async (req: Request, res: Response): Pro
         const conditions: string[] = [];
         const params: unknown[] = [];
 
-        // Hide stations that are still in contract/document workflow (not CEO approved yet).
-        // Station rows can exist early due to contract/document bootstrapping but should not
-        // appear in station views until final CEO approval.
+        // Hide stations while any associated project is not CEO-approved yet.
+        // Only show on Stations pages when the linked investment_project is Approved.
         conditions.push(`
             NOT EXISTS (
                 SELECT 1
                 FROM investment_projects p
                 WHERE COALESCE(NULLIF(p.station_code, ''), p.project_code) = station_information.station_code
-                  AND (
-                    (
-                      p.workflow_path IN ('contract', 'documents')
-                      AND COALESCE(p.review_status, '') <> 'Approved'
-                    )
-                    OR EXISTS (
-                      SELECT 1
-                      FROM project_workflow_tasks t
-                      WHERE t.investment_project_id = p.id
-                        AND t.flow_type IN ('contract', 'documents')
-                        AND t.status IN ('manager_queue', 'assigned', 'employee_submitted', 'manager_submitted', 'under_super_admin_review')
-                    )
-                  )
+                  AND COALESCE(p.review_status, '') <> 'Approved'
             )
         `);
 
@@ -252,7 +239,6 @@ export const getStationInformationByCode = async (req: Request, res: Response): 
                 SELECT 1
                 FROM investment_projects p
                 WHERE COALESCE(NULLIF(p.station_code, ''), p.project_code) = station_information.station_code
-                  AND p.workflow_path IN ('contract', 'documents')
                   AND COALESCE(p.review_status, '') <> 'Approved'
               )
         `;
