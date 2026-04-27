@@ -360,6 +360,7 @@ export const getWorkflowTasks = async (req: AuthRequest, res: Response): Promise
 export const getAssignableUsers = async (req: AuthRequest, res: Response): Promise<void> => {
     try {
         const userRole = req.user?.role;
+        const userDepartment = normalizeDepartment(req.user?.department);
         const targetDepartment = normalizeDepartment(req.query?.targetDepartment);
 
         if (!userRole) {
@@ -367,9 +368,20 @@ export const getAssignableUsers = async (req: AuthRequest, res: Response): Promi
             return;
         }
 
-        if (!(userRole === 'department_manager' || userRole === 'super_admin' || userRole === 'ceo' || userRole === 'supervisor')) {
-            res.status(403).json({ error: 'Only department managers, supervisors, super admin, or CEO can view assignable users' });
-            return;
+        // Only Project department manager (or super admin/CEO) can use assignment flows.
+        if (!(userRole === 'super_admin' || userRole === 'ceo')) {
+            if (!(userRole === 'department_manager' && userDepartment === 'project')) {
+                res.status(403).json({ error: 'Only project department manager can view assignable users' });
+                return;
+            }
+        }
+
+        if (userRole === 'department_manager' && userDepartment === 'project') {
+            // Project manager should only assign within project department.
+            if (targetDepartment && targetDepartment !== 'project') {
+                res.status(403).json({ error: 'Project department manager can only view project assignable users' });
+                return;
+            }
         }
 
         let query = `
@@ -411,9 +423,12 @@ export const assignWorkflowTask = async (req: AuthRequest, res: Response): Promi
             return;
         }
 
-        if (!(actorRole === 'department_manager' || actorRole === 'super_admin' || actorRole === 'ceo' || actorRole === 'supervisor')) {
-            res.status(403).json({ error: 'Only department managers, supervisors, super admin, or CEO can assign tasks' });
-            return;
+        // Only Project department manager (or super admin/CEO) can assign tasks.
+        if (!(actorRole === 'super_admin' || actorRole === 'ceo')) {
+            if (!(actorRole === 'department_manager' && actorDepartment === 'project')) {
+                res.status(403).json({ error: 'Only project department manager can assign tasks' });
+                return;
+            }
         }
 
         if (!assignedToUserId) {
@@ -447,23 +462,32 @@ export const assignWorkflowTask = async (req: AuthRequest, res: Response): Promi
 
         const task = taskLookup.rows[0];
 
+        // For non super_admin: keep project manager assignment scoped to project department only.
         if (actorRole !== 'super_admin') {
             if (!actorDepartment) {
                 res.status(403).json({ error: 'Department is required for this action' });
                 return;
             }
 
-            const belongsToActorDepartment =
-                task.origin_department === actorDepartment || task.target_department === actorDepartment;
+            if (actorDepartment === 'project') {
+                if (resolvedTargetDepartment !== 'project') {
+                    res.status(403).json({ error: 'Project department manager can only assign within project department' });
+                    return;
+                }
+            } else {
+                // For CEO (or any future roles) keep original department scoping rule.
+                const belongsToActorDepartment =
+                    task.origin_department === actorDepartment || task.target_department === actorDepartment;
 
-            if (!belongsToActorDepartment && task.assigned_to !== actorId) {
-                res.status(403).json({ error: 'You are not allowed to assign this task' });
-                return;
-            }
+                if (!belongsToActorDepartment && task.assigned_to !== actorId) {
+                    res.status(403).json({ error: 'You are not allowed to assign this task' });
+                    return;
+                }
 
-            if (resolvedTargetDepartment !== actorDepartment) {
-                res.status(403).json({ error: 'Department managers and supervisors can only assign within their own department' });
-                return;
+                if (resolvedTargetDepartment !== actorDepartment) {
+                    res.status(403).json({ error: 'Department managers can only assign within their own department' });
+                    return;
+                }
             }
         }
 
@@ -744,27 +768,15 @@ export const managerValidateWorkflowTask = async (req: AuthRequest, res: Respons
 
         const task = taskLookup.rows[0];
 
-        const projectScopeResult = await pool.query(
-            `SELECT LOWER(COALESCE(department_type, '')) AS department_type
-             FROM investment_projects
-             WHERE id = $1
-             LIMIT 1`,
-            [task.investment_project_id],
-        );
-        const projectDepartmentType = String(projectScopeResult.rows[0]?.department_type || '');
-        const isProtectedProjectTask = projectDepartmentType === 'investment' || projectDepartmentType === 'franchise' || projectDepartmentType === 'frenchise';
-
-        if (isProtectedProjectTask && userRole !== 'super_admin' && userDepartment !== 'project') {
-            res.status(403).json({ error: 'Only project department manager or super admin can validate this project task' });
-            return;
+        // Only the Project department manager (or super admin) can validate and forward to CEO.
+        if (userRole !== 'super_admin') {
+            if (userRole !== 'department_manager' || userDepartment !== 'project') {
+                res.status(403).json({ error: 'Only project department manager or super admin can validate and send to CEO' });
+                return;
+            }
         }
 
         if (userRole !== 'super_admin') {
-            if (!userDepartment) {
-                res.status(403).json({ error: 'Department is required for this action' });
-                return;
-            }
-
             const belongsToActorDepartment =
                 task.origin_department === userDepartment || task.target_department === userDepartment;
 
