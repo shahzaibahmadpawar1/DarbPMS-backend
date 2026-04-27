@@ -19,11 +19,13 @@ import energyLicensesRoutes from './routes/energyLicenses.routes';
 import governmentLicensesRoutes from './routes/governmentLicenses.routes';
 import investmentProjectsRoutes from './routes/investmentProjects.routes';
 import workflowTasksRoutes from './routes/workflowTasks.routes';
+import feasibilityRoutes from './routes/feasibility.routes';
 import requestsRoutes from './routes/requests.routes';
 import ceoContactRoutes from './routes/ceoContact.routes';
 import fileUploadRoutes from './routes/fileUpload.routes';
 import translationsRoutes from './routes/translations.routes';
 import surveyReportsRoutes from './routes/surveyReports.routes';
+import usersRoutes from './routes/users.routes';
 import pool from './config/database';
 import { authenticateToken } from './middleware/auth';
 import { ensureWorkflowSchema } from './utils/workflow';
@@ -615,11 +617,13 @@ app.use('/api/energy-licenses', energyLicensesRoutes);
 app.use('/api/government-licenses', governmentLicensesRoutes);
 app.use('/api/investment-projects', investmentProjectsRoutes);
 app.use('/api/tasks', workflowTasksRoutes);
+app.use('/api/feasibility', feasibilityRoutes);
 app.use('/api/requests', requestsRoutes);
 app.use('/api/ceo-contact', ceoContactRoutes);
 app.use('/api/files', fileUploadRoutes);
 app.use('/api/translate', translationsRoutes);
 app.use('/api/survey-reports', surveyReportsRoutes);
+app.use('/api/users', usersRoutes);
 
 ensureWorkflowSchema().catch((error) => {
     console.error('Workflow schema bootstrap failed:', error);

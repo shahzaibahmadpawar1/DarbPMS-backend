@@ -11,6 +11,7 @@ import {
     submitRequesterDecision,
     submitManagerAttachment,
     submitEmployeeAttachment,
+    submitFeasibilityManagerReview,
 } from '../controllers/workflowTasks.controller';
 import { authenticateToken } from '../middleware/auth';
 
@@ -26,6 +27,7 @@ router.patch('/:id/assign', assignWorkflowTask);
 router.patch('/:id/manager-attachment', addManagerAttachment);
 router.patch('/:id/manager-submit', submitManagerAttachment);
 router.patch('/:id/employee-submit', submitEmployeeAttachment);
+router.patch('/:id/feasibility-submit', submitFeasibilityManagerReview);
 router.patch('/:id/manager-validate', managerValidateWorkflowTask);
 router.patch('/:id/review', reviewWorkflowTask);
 router.patch('/:id/requester-decision', submitRequesterDecision);

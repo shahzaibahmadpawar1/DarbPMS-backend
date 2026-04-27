@@ -14,7 +14,7 @@ export type WorkflowTaskStatus =
     | 'ceo_rejected'
     | 'requester_accepted'
     | 'requester_declined';
-export type WorkflowTaskFlowType = 'contract' | 'documents' | 'request' | 'ceo_contact';
+export type WorkflowTaskFlowType = 'contract' | 'documents' | 'request' | 'ceo_contact' | 'feasibility';
 export type WorkflowAuditEntity = 'investment_project' | 'workflow_task';
 
 let workflowSchemaReady = false;
@@ -58,7 +58,7 @@ export const ensureWorkflowSchema = async (): Promise<void> => {
             investment_project_id UUID REFERENCES investment_projects(id) ON DELETE CASCADE,
             title VARCHAR(255) NOT NULL,
             description TEXT,
-            flow_type VARCHAR(20) NOT NULL CHECK (flow_type IN ('contract', 'documents', 'request', 'ceo_contact')),
+            flow_type VARCHAR(20) NOT NULL CHECK (flow_type IN ('contract', 'documents', 'request', 'ceo_contact', 'feasibility')),
             status VARCHAR(40) NOT NULL DEFAULT 'manager_queue'
                 CHECK (status IN (
                     'manager_queue',
@@ -118,7 +118,7 @@ export const ensureWorkflowSchema = async (): Promise<void> => {
     await ensureCheckConstraint(
         'project_workflow_tasks',
         'project_workflow_tasks_flow_type_check',
-        `CHECK (flow_type IN ('contract', 'documents', 'request', 'ceo_contact'))`,
+        `CHECK (flow_type IN ('contract', 'documents', 'request', 'ceo_contact', 'feasibility'))`,
     );
 
     await pool.query(`

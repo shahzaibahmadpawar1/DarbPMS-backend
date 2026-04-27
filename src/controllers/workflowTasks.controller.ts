@@ -2,6 +2,7 @@ import { Response } from 'express';
 import pool from '../config/database';
 import { AuthRequest } from '../types';
 import { ensureWorkflowSchema, WorkflowTaskFlowType, recordWorkflowTransition } from '../utils/workflow';
+import { ensureFeasibilitySchema, FEASIBILITY_REVIEW_DEPARTMENTS, type FeasibilityReviewDepartment } from '../utils/feasibility';
 import { isSchemaCompatibilityError } from '../utils/dbErrors';
 import { recordActivity } from '../utils/activity';
 
@@ -59,6 +60,21 @@ const normalizeStationType = (value: unknown): 'investment' | 'franchise' | 'ope
 };
 
 const isValidHttpUrl = (value: string): boolean => /^https?:\/\//i.test(value.trim());
+
+const normalizeFeasibilityDepartment = (value: unknown): FeasibilityReviewDepartment | null => {
+    const normalized = String(value || '').trim().toLowerCase();
+    if (normalized === 'project') return 'project';
+    if (normalized === 'operation' || normalized === 'operations') return 'operation';
+    if (normalized === 'realestate' || normalized === 'real_estate') return 'realestate';
+    if (normalized === 'investment') return 'investment';
+    if (normalized === 'finance') return 'finance';
+    return null;
+};
+
+const pickCeoUserId = async (): Promise<string | null> => {
+    const result = await pool.query(`SELECT id FROM users WHERE role = 'ceo' ORDER BY created_at ASC LIMIT 1`);
+    return result.rows[0]?.id ?? null;
+};
 
 export const createContractRequestTask = async (req: AuthRequest, res: Response): Promise<void> => {
     try {
@@ -924,6 +940,7 @@ export const reviewWorkflowTask = async (req: AuthRequest, res: Response): Promi
         const oldTaskState = task.status;
 
         const isGenericTask = task.flow_type === 'request' || task.flow_type === 'ceo_contact' || !task.investment_project_id;
+        const isFeasibilityTask = task.flow_type === 'feasibility';
 
         if (isGenericTask) {
             if (!(normalizedDecision === 'approved' || normalizedDecision === 'rejected')) {
@@ -1000,6 +1017,90 @@ export const reviewWorkflowTask = async (req: AuthRequest, res: Response): Promi
 
             res.status(200).json({
                 message: `Task ${nextStatus} successfully`,
+                data: updatedTask.rows[0],
+            });
+            return;
+        }
+
+        if (isFeasibilityTask) {
+            if (!(normalizedDecision === 'approved' || normalizedDecision === 'rejected')) {
+                res.status(400).json({ error: 'decision must be approved or rejected for feasibility tasks' });
+                return;
+            }
+
+            if (!isExecutiveReviewer) {
+                res.status(403).json({ error: 'Only super admin or CEO can review feasibility tasks' });
+                return;
+            }
+
+            if (task.target_department !== 'ceo') {
+                res.status(403).json({ error: 'Feasibility decision is only allowed on CEO task' });
+                return;
+            }
+
+            if (task.status !== 'under_super_admin_review') {
+                res.status(409).json({ error: 'Feasibility CEO decision is only allowed from CEO review stage' });
+                return;
+            }
+
+            const taskStatus = normalizedDecision as 'approved' | 'rejected';
+            const updatedTask = await pool.query(`
+                UPDATE project_workflow_tasks
+                SET status = $1,
+                    super_admin_comment = $2,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id = $3
+                RETURNING *
+            `, [taskStatus, comment || null, id]);
+
+            if (taskStatus === 'approved') {
+                await pool.query(`
+                    UPDATE investment_projects
+                    SET review_status = 'Pending Review',
+                        ceo_comment = $1,
+                        updated_by = $2,
+                        updated_at = CURRENT_TIMESTAMP
+                    WHERE id = $3
+                `, [comment || null, userId, task.investment_project_id]);
+
+                await createInitialReviewTaskForProject(task.investment_project_id, userId);
+            } else {
+                await pool.query(`
+                    UPDATE investment_projects
+                    SET review_status = 'Rejected',
+                        ceo_comment = $1,
+                        updated_by = $2,
+                        updated_at = CURRENT_TIMESTAMP
+                    WHERE id = $3
+                `, [comment || null, userId, task.investment_project_id]);
+            }
+
+            await recordWorkflowTransition({
+                entityType: 'workflow_task',
+                entityId: id,
+                oldState: oldTaskState,
+                newState: taskStatus,
+                changedBy: userId,
+                note: comment || `Feasibility task ${taskStatus}`,
+                metadata: {
+                    taskType: 'feasibility',
+                },
+            });
+
+            await recordWorkflowTransition({
+                entityType: 'investment_project',
+                entityId: task.investment_project_id,
+                oldState: task.review_status,
+                newState: taskStatus === 'approved' ? 'Pending Review' : 'Rejected',
+                changedBy: userId,
+                note: comment || `Feasibility project ${taskStatus}`,
+                metadata: {
+                    workflowTaskId: id,
+                },
+            });
+
+            res.status(200).json({
+                message: `Feasibility ${taskStatus} successfully`,
                 data: updatedTask.rows[0],
             });
             return;
@@ -1390,6 +1491,229 @@ export const submitManagerAttachment = async (req: AuthRequest, res: Response): 
         res.status(200).json({ message: 'Branch submission sent to Super Admin review', data: updatedTask.rows[0] });
     } catch (error: any) {
         res.status(500).json({ error: 'Failed to submit manager attachment', details: error.message });
+    }
+};
+
+export const submitFeasibilityManagerReview = async (req: AuthRequest, res: Response): Promise<void> => {
+    try {
+        await ensureWorkflowSchema();
+        await ensureFeasibilitySchema();
+
+        const { id } = req.params;
+        const userId = req.user?.id;
+        const userRole = req.user?.role;
+
+        if (!userId || !userRole) {
+            res.status(401).json({ error: 'Unauthorized' });
+            return;
+        }
+
+        const {
+            suggestions,
+            budget,
+            timeDuration,
+            percentage,
+            requirements,
+        } = req.body as {
+            suggestions?: string;
+            budget?: string | number | null;
+            timeDuration?: string;
+            percentage?: string | number | null;
+            requirements?: string;
+        };
+
+        const taskLookup = await pool.query(`
+            SELECT t.*
+            FROM project_workflow_tasks t
+            WHERE t.id = $1
+            LIMIT 1
+        `, [id]);
+
+        if (!taskLookup.rows.length) {
+            res.status(404).json({ error: 'Task not found' });
+            return;
+        }
+
+        const task = taskLookup.rows[0];
+        if (String(task.flow_type || '') !== 'feasibility') {
+            res.status(400).json({ error: 'This endpoint is only for feasibility tasks' });
+            return;
+        }
+
+        if (task.status !== 'assigned') {
+            res.status(409).json({ error: 'Feasibility review can only be submitted from assigned status' });
+            return;
+        }
+
+        const canSubmit = userRole === 'super_admin' || task.assigned_to === userId;
+        if (!canSubmit) {
+            res.status(403).json({ error: 'Only the assigned manager can submit this feasibility review' });
+            return;
+        }
+
+        const feasibilityDept = normalizeFeasibilityDepartment(task.target_department);
+        if (!feasibilityDept) {
+            res.status(400).json({ error: 'Invalid feasibility target department on task' });
+            return;
+        }
+
+        const normalizedPercentage = percentage === null || percentage === undefined || String(percentage).trim() === ''
+            ? null
+            : Number.parseInt(String(percentage), 10);
+        if (normalizedPercentage !== null && (!Number.isFinite(normalizedPercentage) || normalizedPercentage < 0 || normalizedPercentage > 100)) {
+            res.status(400).json({ error: 'percentage must be a number between 0 and 100' });
+            return;
+        }
+
+        const normalizedBudget = budget === null || budget === undefined || String(budget).trim() === ''
+            ? null
+            : Number(String(budget));
+        if (normalizedBudget !== null && !Number.isFinite(normalizedBudget)) {
+            res.status(400).json({ error: 'budget must be a valid number' });
+            return;
+        }
+
+        const projectId = task.investment_project_id as string | null;
+        if (!projectId) {
+            res.status(400).json({ error: 'Feasibility task must be linked to a project' });
+            return;
+        }
+
+        await pool.query(`
+            INSERT INTO feasibility_manager_reviews (
+                investment_project_id,
+                department,
+                suggestions,
+                budget,
+                time_duration,
+                percentage,
+                requirements,
+                submitted_by,
+                submitted_at,
+                updated_at
+            ) VALUES (
+                $1,$2,$3,$4,$5,$6,$7,$8,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP
+            )
+            ON CONFLICT (investment_project_id, department)
+            DO UPDATE SET
+                suggestions = EXCLUDED.suggestions,
+                budget = EXCLUDED.budget,
+                time_duration = EXCLUDED.time_duration,
+                percentage = EXCLUDED.percentage,
+                requirements = EXCLUDED.requirements,
+                submitted_by = EXCLUDED.submitted_by,
+                submitted_at = EXCLUDED.submitted_at,
+                updated_at = CURRENT_TIMESTAMP
+        `, [
+            projectId,
+            feasibilityDept,
+            String(suggestions || '').trim() || null,
+            normalizedBudget,
+            String(timeDuration || '').trim() || null,
+            normalizedPercentage,
+            String(requirements || '').trim() || null,
+            userId,
+        ]);
+
+        const updatedTask = await pool.query(`
+            UPDATE project_workflow_tasks
+            SET status = 'manager_submitted',
+                manager_note = $1,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = $2
+            RETURNING *
+        `, [String(suggestions || '').trim() || null, id]);
+
+        await recordWorkflowTransition({
+            entityType: 'workflow_task',
+            entityId: id,
+            oldState: task.status,
+            newState: 'manager_submitted',
+            changedBy: userId,
+            note: 'Feasibility manager review submitted',
+            metadata: {
+                projectId,
+                department: feasibilityDept,
+            },
+        });
+
+        // If all required departments submitted, create CEO review task (once).
+        const submitted = await pool.query(`
+            SELECT COUNT(*)::int AS cnt
+            FROM feasibility_manager_reviews
+            WHERE investment_project_id = $1
+              AND department = ANY($2::text[])
+              AND submitted_at IS NOT NULL
+        `, [projectId, FEASIBILITY_REVIEW_DEPARTMENTS]);
+
+        const allSubmitted = (submitted.rows[0]?.cnt ?? 0) >= FEASIBILITY_REVIEW_DEPARTMENTS.length;
+
+        if (allSubmitted) {
+            const existingCeoTask = await pool.query(`
+                SELECT id
+                FROM project_workflow_tasks
+                WHERE investment_project_id = $1
+                  AND flow_type = 'feasibility'
+                  AND target_department = 'ceo'
+                LIMIT 1
+            `, [projectId]);
+
+            if (!existingCeoTask.rows.length) {
+                const ceoUserId = await pickCeoUserId();
+                const inserted = await pool.query(`
+                    INSERT INTO project_workflow_tasks (
+                        investment_project_id,
+                        title,
+                        description,
+                        flow_type,
+                        status,
+                        origin_department,
+                        target_department,
+                        assigned_to,
+                        assigned_by,
+                        metadata,
+                        created_by
+                    ) VALUES (
+                        $1,
+                        $2,
+                        $3,
+                        'feasibility',
+                        'under_super_admin_review',
+                        $4,
+                        'ceo',
+                        $5,
+                        $6,
+                        $7::jsonb,
+                        $6
+                    )
+                    RETURNING id
+                `, [
+                    projectId,
+                    'Feasibility Study - CEO Review',
+                    'All department managers have submitted their feasibility inputs. Please approve or reject.',
+                    task.origin_department,
+                    ceoUserId,
+                    userId,
+                    JSON.stringify({ feasibility: { stage: 'ceo_review' } }),
+                ]);
+
+                await recordWorkflowTransition({
+                    entityType: 'workflow_task',
+                    entityId: inserted.rows[0].id,
+                    oldState: null,
+                    newState: 'under_super_admin_review',
+                    changedBy: userId,
+                    note: 'CEO feasibility review task created',
+                    metadata: {
+                        projectId,
+                    },
+                });
+            }
+        }
+
+        res.status(200).json({ message: 'Feasibility review submitted', data: updatedTask.rows[0] });
+    } catch (error: any) {
+        res.status(500).json({ error: 'Failed to submit feasibility review', details: error.message });
     }
 };
 
