@@ -7,6 +7,7 @@ const router = Router();
 router.use(authenticateToken);
 
 router.post('/submit', requireCapability('create'), requireDepartmentMatchFromBody('departmentType'), FeasibilityController.submit);
+router.get('/:taskId/details', requireCapability('view'), FeasibilityController.getDetails);
 
 export default router;
 

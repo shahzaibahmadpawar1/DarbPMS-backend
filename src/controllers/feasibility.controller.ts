@@ -57,6 +57,108 @@ const normalizeReviewDepartment = (value: unknown): FeasibilityReviewDepartment 
 };
 
 export class FeasibilityController {
+    static async getDetails(req: AuthRequest, res: Response): Promise<void> {
+        try {
+            await ensureWorkflowSchema();
+            await ensureFeasibilitySchema();
+
+            const userId = req.user?.id;
+            const userRole = req.user?.role;
+            if (!userId || !userRole) {
+                res.status(401).json({ error: 'Unauthorized' });
+                return;
+            }
+
+            const taskId = String(req.params?.taskId || '').trim();
+            if (!taskId) {
+                res.status(400).json({ error: 'taskId is required' });
+                return;
+            }
+
+            const taskResult = await pool.query(
+                `
+                    SELECT t.*,
+                           acu.username AS created_by_username
+                    FROM project_workflow_tasks t
+                    LEFT JOIN users acu ON acu.id = t.created_by
+                    WHERE t.id = $1
+                      AND t.flow_type = 'feasibility'
+                    LIMIT 1
+                `,
+                [taskId],
+            );
+
+            if (!taskResult.rows.length) {
+                res.status(404).json({ error: 'Feasibility task not found' });
+                return;
+            }
+
+            const task = taskResult.rows[0];
+            const projectId = task.investment_project_id as string | null;
+            if (!projectId) {
+                res.status(400).json({ error: 'Feasibility task is missing investment_project_id' });
+                return;
+            }
+
+            const isExecutive = userRole === 'super_admin' || userRole === 'ceo';
+            if (!isExecutive) {
+                const participant = await pool.query(
+                    `
+                        SELECT 1
+                        FROM feasibility_task_participants fp
+                        WHERE fp.task_id = $1 AND fp.user_id = $2
+                        LIMIT 1
+                    `,
+                    [taskId, userId],
+                );
+                const isSubmitter = task.created_by === userId;
+                if (!participant.rows.length && !isSubmitter) {
+                    res.status(403).json({ error: 'You are not allowed to view this feasibility task' });
+                    return;
+                }
+            }
+
+            const projectResult = await pool.query(
+                `SELECT * FROM investment_projects WHERE id = $1 LIMIT 1`,
+                [projectId],
+            );
+            const project = projectResult.rows[0] || null;
+
+            const participantsResult = await pool.query(
+                `
+                    SELECT fp.department, fp.user_id, u.username
+                    FROM feasibility_task_participants fp
+                    LEFT JOIN users u ON u.id = fp.user_id
+                    WHERE fp.task_id = $1
+                    ORDER BY fp.department
+                `,
+                [taskId],
+            );
+
+            const reviewsResult = await pool.query(
+                `
+                    SELECT *
+                    FROM feasibility_manager_reviews
+                    WHERE investment_project_id = $1
+                    ORDER BY department
+                `,
+                [projectId],
+            );
+
+            res.status(200).json({
+                data: {
+                    task,
+                    project,
+                    participants: participantsResult.rows,
+                    reviews: reviewsResult.rows,
+                    requiredDepartments: FEASIBILITY_REVIEW_DEPARTMENTS,
+                },
+            });
+        } catch (error: any) {
+            res.status(500).json({ error: 'Failed to fetch feasibility details', details: error.message });
+        }
+    }
+
     static async submit(req: AuthRequest, res: Response): Promise<void> {
         try {
             await ensureWorkflowSchema();
@@ -219,70 +321,80 @@ export class FeasibilityController {
                 },
             });
 
-            // Create 5 manager tasks and pre-assign to each selected manager.
-            for (const dept of FEASIBILITY_REVIEW_DEPARTMENTS) {
-                const managerId = resolvedManagers[dept];
-                const task = await pool.query(
-                    `
-                        INSERT INTO project_workflow_tasks (
-                            investment_project_id,
-                            title,
-                            description,
-                            flow_type,
-                            status,
-                            origin_department,
-                            target_department,
-                            assigned_to,
-                            assigned_by,
-                            metadata,
-                            created_by
-                        ) VALUES (
-                            $1,
-                            $2,
-                            $3,
-                            'feasibility',
-                            'assigned',
-                            $4,
-                            $5,
-                            $6,
-                            $7,
-                            $8::jsonb,
-                            $7
-                        )
-                        RETURNING id
-                    `,
-                    [
-                        project.id,
-                        `Feasibility Review - ${project.project_name}`,
-                        `Provide feasibility review inputs for ${dept} department.`,
-                        departmentType,
-                        dept,
-                        managerId,
-                        actorId,
-                        JSON.stringify({
-                            feasibility: {
-                                department: dept,
-                            },
-                        }),
-                    ],
-                );
+            // Create ONE shared feasibility task (visible via feasibility_task_participants).
+            const insertedTask = await pool.query(
+                `
+                    INSERT INTO project_workflow_tasks (
+                        investment_project_id,
+                        title,
+                        description,
+                        flow_type,
+                        status,
+                        origin_department,
+                        target_department,
+                        assigned_to,
+                        assigned_by,
+                        metadata,
+                        created_by
+                    ) VALUES (
+                        $1,
+                        $2,
+                        $3,
+                        'feasibility',
+                        'assigned',
+                        $4,
+                        $4,
+                        NULL,
+                        $5,
+                        $6::jsonb,
+                        $5
+                    )
+                    RETURNING id
+                `,
+                [
+                    project.id,
+                    `Feasibility Study - ${project.project_name}`,
+                    `Feasibility study shared review task for project ${project.project_code}.`,
+                    departmentType,
+                    actorId,
+                    JSON.stringify({
+                        feasibility: {
+                            stage: 'manager_review',
+                            departments: FEASIBILITY_REVIEW_DEPARTMENTS,
+                        },
+                    }),
+                ],
+            );
 
-                await recordWorkflowTransition({
-                    entityType: 'workflow_task',
-                    entityId: task.rows[0].id,
-                    oldState: null,
-                    newState: 'assigned',
-                    changedBy: actorId,
-                    note: 'Feasibility review task created',
-                    metadata: {
-                        projectId: project.id,
-                        department: dept,
-                        assignedToUserId: managerId,
-                    },
-                });
+            const taskId = insertedTask.rows[0].id as string;
+
+            // Register participants (one per required department).
+            for (const dept of FEASIBILITY_REVIEW_DEPARTMENTS) {
+                await pool.query(
+                    `
+                        INSERT INTO feasibility_task_participants (task_id, user_id, department)
+                        VALUES ($1, $2, $3)
+                        ON CONFLICT (task_id, department) DO UPDATE
+                        SET user_id = EXCLUDED.user_id
+                    `,
+                    [taskId, resolvedManagers[dept], dept],
+                );
             }
 
-            res.status(201).json({ data: project });
+            await recordWorkflowTransition({
+                entityType: 'workflow_task',
+                entityId: taskId,
+                oldState: null,
+                newState: 'assigned',
+                changedBy: actorId,
+                note: 'Shared feasibility task created',
+                metadata: {
+                    projectId: project.id,
+                    participants: resolvedManagers,
+                },
+            });
+
+            res.status(201).json({ data: { project, taskId } });
         } catch (error: any) {
             if (error.code === '23505') {
                 res.status(409).json({ error: 'Project code already exists' });

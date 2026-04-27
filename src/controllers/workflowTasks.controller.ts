@@ -292,6 +292,18 @@ export const getWorkflowTasks = async (req: AuthRequest, res: Response): Promise
                         AND (t.assigned_to = $2 OR t.created_by = $2)
                     )
                     OR (
+                        t.flow_type = 'feasibility'
+                        AND (
+                            t.created_by = $2
+                            OR EXISTS (
+                                SELECT 1
+                                FROM feasibility_task_participants fp
+                                WHERE fp.task_id = t.id
+                                  AND fp.user_id = $2
+                            )
+                        )
+                    )
+                    OR (
                         (t.flow_type NOT IN ('request', 'ceo_contact') OR t.flow_type IS NULL)
                         AND (
                             t.origin_department = $1
@@ -299,6 +311,7 @@ export const getWorkflowTasks = async (req: AuthRequest, res: Response): Promise
                             OR t.assigned_to = $2
                             OR t.created_by = $2
                         )
+                        AND t.flow_type <> 'feasibility'
                     )
                     )
                 `;
@@ -319,7 +332,23 @@ export const getWorkflowTasks = async (req: AuthRequest, res: Response): Promise
                 }
             } else {
                 // Supervisors/employees should only see tasks explicitly assigned to them.
-                query += ' WHERE (t.assigned_to = $1 OR t.created_by = $1)';
+                query += `
+                    WHERE (
+                        (t.assigned_to = $1 OR t.created_by = $1)
+                        OR (
+                            t.flow_type = 'feasibility'
+                            AND (
+                                t.created_by = $1
+                                OR EXISTS (
+                                    SELECT 1
+                                    FROM feasibility_task_participants fp
+                                    WHERE fp.task_id = t.id
+                                      AND fp.user_id = $1
+                                )
+                            )
+                        )
+                    )
+                `;
                 params.push(userId);
                 if (restrictInvestmentProjectTasks) {
                     query += `
@@ -1540,22 +1569,33 @@ export const submitFeasibilityManagerReview = async (req: AuthRequest, res: Resp
             return;
         }
 
-        if (task.status !== 'assigned') {
-            res.status(409).json({ error: 'Feasibility review can only be submitted from assigned status' });
+        if (!(task.status === 'assigned' || task.status === 'manager_submitted')) {
+            res.status(409).json({ error: 'Feasibility review can only be submitted while task is in progress' });
             return;
         }
 
-        const canSubmit = userRole === 'super_admin' || task.assigned_to === userId;
-        if (!canSubmit) {
-            res.status(403).json({ error: 'Only the assigned manager can submit this feasibility review' });
+        // Validate caller is a participant and infer their department section.
+        const participantLookup = await pool.query(
+            `
+                SELECT department
+                FROM feasibility_task_participants
+                WHERE task_id = $1
+                  AND user_id = $2
+                LIMIT 1
+            `,
+            [id, userId],
+        );
+
+        const feasibilityDept = participantLookup.rows[0]?.department
+            ? normalizeFeasibilityDepartment(participantLookup.rows[0].department)
+            : null;
+
+        if (!feasibilityDept && userRole !== 'super_admin') {
+            res.status(403).json({ error: 'You are not allowed to submit this feasibility section' });
             return;
         }
 
-        const feasibilityDept = normalizeFeasibilityDepartment(task.target_department);
-        if (!feasibilityDept) {
-            res.status(400).json({ error: 'Invalid feasibility target department on task' });
-            return;
-        }
+        const resolvedDept = feasibilityDept || 'investment';
 
         const normalizedPercentage = percentage === null || percentage === undefined || String(percentage).trim() === ''
             ? null
@@ -1606,7 +1646,7 @@ export const submitFeasibilityManagerReview = async (req: AuthRequest, res: Resp
                 updated_at = CURRENT_TIMESTAMP
         `, [
             projectId,
-            feasibilityDept,
+            resolvedDept,
             String(suggestions || '').trim() || null,
             normalizedBudget,
             String(timeDuration || '').trim() || null,
@@ -1617,8 +1657,8 @@ export const submitFeasibilityManagerReview = async (req: AuthRequest, res: Resp
 
         const updatedTask = await pool.query(`
             UPDATE project_workflow_tasks
-            SET status = 'manager_submitted',
-                manager_note = $1,
+            SET status = 'assigned',
+                manager_note = COALESCE($1, manager_note),
                 updated_at = CURRENT_TIMESTAMP
             WHERE id = $2
             RETURNING *
@@ -1628,16 +1668,16 @@ export const submitFeasibilityManagerReview = async (req: AuthRequest, res: Resp
             entityType: 'workflow_task',
             entityId: id,
             oldState: task.status,
-            newState: 'manager_submitted',
+            newState: 'feasibility_department_submitted',
             changedBy: userId,
             note: 'Feasibility manager review submitted',
             metadata: {
                 projectId,
-                department: feasibilityDept,
+                department: resolvedDept,
             },
         });
 
-        // If all required departments submitted, create CEO review task (once).
+        // If all required departments submitted, move SAME task to CEO stage.
         const submitted = await pool.query(`
             SELECT COUNT(*)::int AS cnt
             FROM feasibility_manager_reviews
@@ -1649,66 +1689,27 @@ export const submitFeasibilityManagerReview = async (req: AuthRequest, res: Resp
         const allSubmitted = (submitted.rows[0]?.cnt ?? 0) >= FEASIBILITY_REVIEW_DEPARTMENTS.length;
 
         if (allSubmitted) {
-            const existingCeoTask = await pool.query(`
-                SELECT id
-                FROM project_workflow_tasks
-                WHERE investment_project_id = $1
-                  AND flow_type = 'feasibility'
-                  AND target_department = 'ceo'
-                LIMIT 1
-            `, [projectId]);
+            const ceoUserId = await pickCeoUserId();
+            await pool.query(`
+                UPDATE project_workflow_tasks
+                SET status = 'under_super_admin_review',
+                    target_department = 'ceo',
+                    assigned_to = $1,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id = $2
+            `, [ceoUserId, id]);
 
-            if (!existingCeoTask.rows.length) {
-                const ceoUserId = await pickCeoUserId();
-                const inserted = await pool.query(`
-                    INSERT INTO project_workflow_tasks (
-                        investment_project_id,
-                        title,
-                        description,
-                        flow_type,
-                        status,
-                        origin_department,
-                        target_department,
-                        assigned_to,
-                        assigned_by,
-                        metadata,
-                        created_by
-                    ) VALUES (
-                        $1,
-                        $2,
-                        $3,
-                        'feasibility',
-                        'under_super_admin_review',
-                        $4,
-                        'ceo',
-                        $5,
-                        $6,
-                        $7::jsonb,
-                        $6
-                    )
-                    RETURNING id
-                `, [
+            await recordWorkflowTransition({
+                entityType: 'workflow_task',
+                entityId: id,
+                oldState: updatedTask.rows[0]?.status || task.status,
+                newState: 'under_super_admin_review',
+                changedBy: userId,
+                note: 'Feasibility task moved to CEO review',
+                metadata: {
                     projectId,
-                    'Feasibility Study - CEO Review',
-                    'All department managers have submitted their feasibility inputs. Please approve or reject.',
-                    task.origin_department,
-                    ceoUserId,
-                    userId,
-                    JSON.stringify({ feasibility: { stage: 'ceo_review' } }),
-                ]);
-
-                await recordWorkflowTransition({
-                    entityType: 'workflow_task',
-                    entityId: inserted.rows[0].id,
-                    oldState: null,
-                    newState: 'under_super_admin_review',
-                    changedBy: userId,
-                    note: 'CEO feasibility review task created',
-                    metadata: {
-                        projectId,
-                    },
-                });
-            }
+                },
+            });
         }
 
         res.status(200).json({ message: 'Feasibility review submitted', data: updatedTask.rows[0] });
