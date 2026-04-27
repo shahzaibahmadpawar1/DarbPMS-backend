@@ -668,13 +668,23 @@ app.get('/api/dashboard/stats', authenticateToken, async (req: Request, res: Res
             }
         };
 
+        const hideStationsUntilWorkflowApprovedClause = `
+            NOT EXISTS (
+                SELECT 1
+                FROM investment_projects p
+                WHERE COALESCE(NULLIF(p.station_code, ''), p.project_code) = station_information.station_code
+                  AND p.workflow_path IN ('contract', 'documents')
+                  AND COALESCE(p.review_status, '') <> 'Approved'
+            )
+        `;
+
         const stationSummaryParams: unknown[] = [];
         const stationSummaryWhere = stationType
             ? (() => {
                 stationSummaryParams.push(stationType);
-                return `WHERE ${normalizedStationTypeSql('station_type_code')} = $${stationSummaryParams.length}`;
+                return `WHERE ${hideStationsUntilWorkflowApprovedClause} AND ${normalizedStationTypeSql('station_type_code')} = $${stationSummaryParams.length}`;
             })()
-            : '';
+            : `WHERE ${hideStationsUntilWorkflowApprovedClause}`;
 
         const projectSummaryParams: unknown[] = [];
         const projectSummaryWhere = stationType
@@ -696,9 +706,9 @@ app.get('/api/dashboard/stats', authenticateToken, async (req: Request, res: Res
         const stationsListWhere = stationType
             ? (() => {
                 stationsListParams.push(stationType);
-                return `WHERE ${normalizedStationTypeSql('station_type_code')} = $${stationsListParams.length}`;
+                return `WHERE ${hideStationsUntilWorkflowApprovedClause} AND ${normalizedStationTypeSql('station_type_code')} = $${stationsListParams.length}`;
             })()
-            : '';
+            : `WHERE ${hideStationsUntilWorkflowApprovedClause}`;
 
         const [stationsResult, projectsResult, recentResult, stationsListResult, workflowResult] = await Promise.all([
             queryOneWithFallback('stations summary', `

@@ -17,6 +17,10 @@ const ensureInvestmentLifecycleSchema = async (): Promise<void> => {
     `);
     await pool.query(`
         ALTER TABLE investment_projects
+        ADD COLUMN IF NOT EXISTS workflow_path VARCHAR(50);
+    `);
+    await pool.query(`
+        ALTER TABLE investment_projects
         ADD COLUMN IF NOT EXISTS submitted_at TIMESTAMP WITH TIME ZONE;
     `);
     await pool.query(`
