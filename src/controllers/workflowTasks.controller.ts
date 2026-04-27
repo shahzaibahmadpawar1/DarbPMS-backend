@@ -294,7 +294,11 @@ export const getWorkflowTasks = async (req: AuthRequest, res: Response): Promise
                     OR (
                         t.flow_type = 'feasibility'
                         AND (
-                            t.created_by = $2
+                            (
+                                t.created_by = $2
+                                -- submitter should only see the shared feasibility task (assigned_to NULL) and CEO-stage
+                                AND (t.assigned_to IS NULL OR t.target_department = 'ceo')
+                            )
                             OR EXISTS (
                                 SELECT 1
                                 FROM feasibility_task_participants fp
@@ -339,7 +343,10 @@ export const getWorkflowTasks = async (req: AuthRequest, res: Response): Promise
                         OR (
                             t.flow_type = 'feasibility'
                             AND (
-                                t.created_by = $1
+                                (
+                                    t.created_by = $1
+                                    AND (t.assigned_to IS NULL OR t.target_department = 'ceo')
+                                )
                                 OR EXISTS (
                                     SELECT 1
                                     FROM feasibility_task_participants fp
