@@ -305,12 +305,18 @@ export const requireStationDepartmentAccess = (
             const stationCode = bodyStationCode || paramStationCode;
 
             if (!stationCode) {
+                // #region agent log
+                fetch('http://127.0.0.1:7730/ingest/bda40298-65a3-4360-a735-3ab547a78ec4',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'506aaf'},body:JSON.stringify({sessionId:'506aaf',runId:'pre-fix',hypothesisId:'A_B_C_D',location:'auth.ts:requireStationDepartmentAccess',message:'Missing stationCode',data:{role:req.user.role,department:req.user.department,paramField,bodyField},timestamp:Date.now()})}).catch(()=>{});
+                // #endregion
                 res.status(400).json({ success: false, message: 'Station code is required for department scoping' });
                 return;
             }
 
             const stationScope = await resolveStationIdentifier(String(stationCode));
             if (!stationScope) {
+                // #region agent log
+                fetch('http://127.0.0.1:7730/ingest/bda40298-65a3-4360-a735-3ab547a78ec4',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'506aaf'},body:JSON.stringify({sessionId:'506aaf',runId:'pre-fix',hypothesisId:'A_B_C_D',location:'auth.ts:requireStationDepartmentAccess',message:'Station scope lookup failed',data:{identifier:String(stationCode),role:req.user.role,department:req.user.department},timestamp:Date.now()})}).catch(()=>{});
+                // #endregion
                 res.status(403).json({ success: false, message: 'Station is outside allowed scope' });
                 return;
             }
@@ -335,15 +341,24 @@ export const requireStationDepartmentAccess = (
             }
 
             if (!stationScope.department) {
+                // #region agent log
+                fetch('http://127.0.0.1:7730/ingest/bda40298-65a3-4360-a735-3ab547a78ec4',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'506aaf'},body:JSON.stringify({sessionId:'506aaf',runId:'pre-fix',hypothesisId:'D',location:'auth.ts:requireStationDepartmentAccess',message:'Station department could not be normalized',data:{identifier:String(stationCode),resolvedStationCode:stationScope.stationCode,userDepartment:req.user.department},timestamp:Date.now()})}).catch(()=>{});
+                // #endregion
                 res.status(403).json({ success: false, message: 'Station is outside allowed department scope' });
                 return;
             }
 
             if (req.user.department !== stationScope.department) {
+                // #region agent log
+                fetch('http://127.0.0.1:7730/ingest/bda40298-65a3-4360-a735-3ab547a78ec4',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'506aaf'},body:JSON.stringify({sessionId:'506aaf',runId:'pre-fix',hypothesisId:'B_C',location:'auth.ts:requireStationDepartmentAccess',message:'Cross-department station access denied',data:{identifier:String(stationCode),resolvedStationCode:stationScope.stationCode,stationDepartment:stationScope.department,userDepartment:req.user.department,role:req.user.role},timestamp:Date.now()})}).catch(()=>{});
+                // #endregion
                 res.status(403).json({ success: false, message: 'Cross-department access is not allowed' });
                 return;
             }
 
+            // #region agent log
+            fetch('http://127.0.0.1:7730/ingest/bda40298-65a3-4360-a735-3ab547a78ec4',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'506aaf'},body:JSON.stringify({sessionId:'506aaf',runId:'pre-fix',hypothesisId:'A_B_C_D',location:'auth.ts:requireStationDepartmentAccess',message:'Station access granted',data:{identifier:String(stationCode),resolvedStationCode:stationScope.stationCode,stationDepartment:stationScope.department,userDepartment:req.user.department,role:req.user.role},timestamp:Date.now()})}).catch(()=>{});
+            // #endregion
             next();
         } catch {
             res.status(500).json({ success: false, message: 'Internal server error' });
