@@ -1578,6 +1578,12 @@ export const submitFeasibilityManagerReview = async (req: AuthRequest, res: Resp
             return;
         }
 
+        const taskMetadata = (task.metadata && typeof task.metadata === 'object') ? task.metadata : {};
+        const unlockedDepartmentsRaw = (taskMetadata as any)?.feasibility?.unlockedDepartments;
+        const unlockedDepartments = Array.isArray(unlockedDepartmentsRaw)
+            ? unlockedDepartmentsRaw.map((d: any) => String(d || '').trim()).filter(Boolean)
+            : [];
+
         if (!(task.status === 'assigned' || task.status === 'manager_submitted')) {
             res.status(409).json({ error: 'Feasibility review can only be submitted while task is in progress' });
             return;
@@ -1605,6 +1611,25 @@ export const submitFeasibilityManagerReview = async (req: AuthRequest, res: Resp
         }
 
         const resolvedDept = feasibilityDept || 'investment';
+
+        // Prevent overwriting a previously submitted section unless Super Admin unlocked it.
+        if (userRole !== 'super_admin') {
+            const existingReview = await pool.query(
+                `
+                    SELECT submitted_at
+                    FROM feasibility_manager_reviews
+                    WHERE investment_project_id = $1 AND department = $2
+                    LIMIT 1
+                `,
+                [task.investment_project_id, resolvedDept],
+            );
+            const alreadySubmitted = !!existingReview.rows[0]?.submitted_at;
+            const isUnlocked = unlockedDepartments.includes(resolvedDept);
+            if (alreadySubmitted && !isUnlocked) {
+                res.status(409).json({ error: 'This department section is locked. Ask Super Admin to unlock for re-edit.' });
+                return;
+            }
+        }
 
         const normalizedPercentage = percentage === null || percentage === undefined || String(percentage).trim() === ''
             ? null
@@ -1663,6 +1688,27 @@ export const submitFeasibilityManagerReview = async (req: AuthRequest, res: Resp
             String(requirements || '').trim() || null,
             userId,
         ]);
+
+        // After a successful re-submit, re-lock the department by removing it from unlocked list (if present).
+        if (unlockedDepartments.includes(resolvedDept)) {
+            const nextUnlocked = unlockedDepartments.filter((d: string) => d !== resolvedDept);
+            const nextMetadata = {
+                ...(taskMetadata as any),
+                feasibility: {
+                    ...((taskMetadata as any)?.feasibility || {}),
+                    unlockedDepartments: nextUnlocked,
+                },
+            };
+            await pool.query(
+                `
+                    UPDATE project_workflow_tasks
+                    SET metadata = $1::jsonb,
+                        updated_at = CURRENT_TIMESTAMP
+                    WHERE id = $2
+                `,
+                [JSON.stringify(nextMetadata), id],
+            );
+        }
 
         const updatedTask = await pool.query(`
             UPDATE project_workflow_tasks
@@ -1724,6 +1770,104 @@ export const submitFeasibilityManagerReview = async (req: AuthRequest, res: Resp
         res.status(200).json({ message: 'Feasibility review submitted', data: updatedTask.rows[0] });
     } catch (error: any) {
         res.status(500).json({ error: 'Failed to submit feasibility review', details: error.message });
+    }
+};
+
+export const setFeasibilityDepartmentUnlock = async (req: AuthRequest, res: Response): Promise<void> => {
+    try {
+        await ensureWorkflowSchema();
+
+        const { id } = req.params;
+        const actorId = req.user?.id;
+        const actorRole = req.user?.role;
+
+        if (!actorId || !actorRole) {
+            res.status(401).json({ error: 'Unauthorized' });
+            return;
+        }
+
+        if (actorRole !== 'super_admin') {
+            res.status(403).json({ error: 'Only Super Admin can unlock feasibility sections' });
+            return;
+        }
+
+        const department = String(req.body?.department || '').trim().toLowerCase();
+        const unlock = Boolean(req.body?.unlock);
+        if (!department) {
+            res.status(400).json({ error: 'department is required' });
+            return;
+        }
+
+        if (!FEASIBILITY_REVIEW_DEPARTMENTS.includes(department as any)) {
+            res.status(400).json({ error: 'Invalid department for feasibility unlock' });
+            return;
+        }
+
+        const taskLookup = await pool.query(
+            `SELECT * FROM project_workflow_tasks WHERE id = $1 LIMIT 1`,
+            [id],
+        );
+        if (!taskLookup.rows.length) {
+            res.status(404).json({ error: 'Task not found' });
+            return;
+        }
+
+        const task = taskLookup.rows[0];
+        if (String(task.flow_type || '') !== 'feasibility') {
+            res.status(400).json({ error: 'This endpoint is only for feasibility tasks' });
+            return;
+        }
+
+        const prevMetadata = (task.metadata && typeof task.metadata === 'object') ? task.metadata : {};
+        const prevUnlockedRaw = (prevMetadata as any)?.feasibility?.unlockedDepartments;
+        const prevUnlocked = Array.isArray(prevUnlockedRaw)
+            ? prevUnlockedRaw.map((d: any) => String(d || '').trim()).filter(Boolean)
+            : [];
+
+        const nextUnlocked = unlock
+            ? Array.from(new Set([...prevUnlocked, department]))
+            : prevUnlocked.filter((d: string) => d !== department);
+
+        const nextMetadata = {
+            ...(prevMetadata as any),
+            feasibility: {
+                ...((prevMetadata as any)?.feasibility || {}),
+                unlockedDepartments: nextUnlocked,
+            },
+        };
+
+        // When unlocking, bring task back to "assigned" so department managers can act again.
+        // Keep it a single shared task; visibility is handled via feasibility_task_participants.
+        const nextStatus = 'assigned';
+        const update = await pool.query(
+            `
+                UPDATE project_workflow_tasks
+                SET metadata = $1::jsonb,
+                    status = $2,
+                    assigned_to = NULL,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id = $3
+                RETURNING *
+            `,
+            [JSON.stringify(nextMetadata), nextStatus, id],
+        );
+
+        await recordWorkflowTransition({
+            entityType: 'workflow_task',
+            entityId: id,
+            oldState: task.status,
+            newState: nextStatus,
+            changedBy: actorId,
+            note: unlock ? `Unlocked ${department} section for re-edit` : `Locked ${department} section`,
+            metadata: {
+                department,
+                unlock,
+            },
+        });
+
+        res.status(200).json({ message: 'Feasibility unlock updated', data: update.rows[0] });
+    } catch (error: any) {
+        res.status(500).json({ error: 'Failed to update feasibility unlock', details: error.message });
     }
 };
 

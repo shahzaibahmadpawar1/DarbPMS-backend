@@ -198,6 +198,22 @@ export class FeasibilityController {
             const email = String(req.body?.email || '').trim();
             const ownerType = String(req.body?.ownerType || 'individual').trim() || 'individual';
 
+            const superMarket = Number(req.body?.superMarket ?? 0) || 0;
+            const fuelStation = Number(req.body?.fuelStation ?? 0) || 0;
+            const kiosks = Number(req.body?.kiosks ?? 0) || 0;
+            const retailShop = Number(req.body?.retailShop ?? 0) || 0;
+            const driveThrough = Number(req.body?.driveThrough ?? 0) || 0;
+
+            const superMarketArea = Number(req.body?.superMarketArea ?? 0) || 0;
+            const fuelStationArea = Number(req.body?.fuelStationArea ?? 0) || 0;
+            const kiosksArea = Number(req.body?.kiosksArea ?? 0) || 0;
+            const retailShopArea = Number(req.body?.retailShopArea ?? 0) || 0;
+            const driveThroughArea = Number(req.body?.driveThroughArea ?? 0) || 0;
+
+            const designFileUrl = String(req.body?.designFileUrl || '').trim() || null;
+            const documentsUrl = String(req.body?.documentsUrl || '').trim() || null;
+            const autocadUrl = String(req.body?.autocadUrl || '').trim() || null;
+
             if (!projectName || !projectCode) {
                 res.status(400).json({ error: 'projectName and projectCode are required' });
                 return;
@@ -256,12 +272,25 @@ export class FeasibilityController {
                         priority_level,
                         order_date,
                         request_sender,
+                        super_market,
+                        fuel_station,
+                        kiosks,
+                        retail_shop,
+                        drive_through,
+                        super_market_area,
+                        fuel_station_area,
+                        kiosks_area,
+                        retail_shop_area,
+                        drive_through_area,
                         owner_name,
                         owner_contact_no,
                         id_no,
                         national_address,
                         email,
                         owner_type,
+                        design_file_url,
+                        documents_url,
+                        autocad_url,
                         review_status,
                         is_submitted,
                         submitted_at,
@@ -270,13 +299,16 @@ export class FeasibilityController {
                         updated_by
                     ) VALUES (
                         $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,
-                        $14,$15,$16,$17,$18,$19,
-                        $20,
+                        $14,$15,$16,$17,$18,
+                        $19,$20,$21,$22,$23,
+                        $24,$25,$26,$27,$28,$29,
+                        $30,$31,$32,
+                        $33,
                         TRUE,
                         CURRENT_TIMESTAMP,
-                        $21,
-                        $21,
-                        $21
+                        $34,
+                        $34,
+                        $34
                     )
                     RETURNING *
                 `,
@@ -294,12 +326,25 @@ export class FeasibilityController {
                     priorityLevel || null,
                     orderDate || null,
                     requestSender || null,
+                    superMarket,
+                    fuelStation,
+                    kiosks,
+                    retailShop,
+                    driveThrough,
+                    superMarketArea,
+                    fuelStationArea,
+                    kiosksArea,
+                    retailShopArea,
+                    driveThroughArea,
                     ownerName || null,
                     ownerContactNo || null,
                     idNo || null,
                     nationalAddress || null,
                     email || null,
                     ownerType,
+                    designFileUrl,
+                    documentsUrl,
+                    autocadUrl,
                     'Pending Review',
                     actorId,
                 ],
