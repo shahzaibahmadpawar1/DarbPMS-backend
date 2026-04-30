@@ -96,15 +96,23 @@ export class UsersController {
             }
 
             const query = String(req.query?.query || '').trim().toLowerCase();
+            const department = normalizeDepartment(req.query?.department);
             const limitRaw = Number.parseInt(String(req.query?.limit || '50'), 10);
             const limit = Number.isFinite(limitRaw) ? Math.min(Math.max(limitRaw, 1), 200) : 50;
 
             const params: any[] = [];
-            let where = '';
+            const clauses: string[] = [];
             if (query) {
                 params.push(`%${query}%`);
-                where = `WHERE lower(username) LIKE $1 OR lower(email) LIKE $1`;
+                clauses.push(`(lower(username) LIKE $${params.length} OR lower(email) LIKE $${params.length})`);
             }
+
+            if (department) {
+                params.push(department);
+                clauses.push(`lower(department) = $${params.length}`);
+            }
+
+            const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
 
             const result = await pool.query(
                 `

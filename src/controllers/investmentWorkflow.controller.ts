@@ -547,16 +547,25 @@ export class InvestmentWorkflowController {
                 res.status(401).json({ error: 'Unauthorized' });
                 return;
             }
-            if (!requireInvestmentOrSuperAdmin(req)) {
-                res.status(403).json({ error: 'Only Investment department can save studies' });
-                return;
-            }
 
             const id = String(req.body?.id || '').trim() || null;
             const opportunityId = String(req.body?.opportunityId || '').trim();
             if (!opportunityId) {
                 res.status(400).json({ error: 'opportunityId is required' });
                 return;
+            }
+
+            // Allow Investment dept / executives OR the assigned specialist for this opportunity
+            if (!requireInvestmentOrSuperAdmin(req)) {
+                const opp = await pool.query(
+                    `SELECT investment_specialist_user_id FROM investment_opportunities WHERE id = $1 LIMIT 1`,
+                    [opportunityId],
+                );
+                const specialistId = String(opp.rows[0]?.investment_specialist_user_id || '');
+                if (!specialistId || specialistId !== String(userId)) {
+                    res.status(403).json({ error: 'Only Investment department or assigned specialist can save this study' });
+                    return;
+                }
             }
 
             const studyStatus = String(req.body?.studyStatus || 'Initial').trim() || 'Initial';
@@ -653,6 +662,24 @@ export class InvestmentWorkflowController {
             if (!id) {
                 res.status(400).json({ error: 'id is required' });
                 return;
+            }
+
+            if (!requireInvestmentOrSuperAdmin(req)) {
+                const lookup = await pool.query(
+                    `
+                        SELECT s.opportunity_id, o.investment_specialist_user_id
+                        FROM investment_feasibility_studies s
+                        JOIN investment_opportunities o ON o.id = s.opportunity_id
+                        WHERE s.id = $1
+                        LIMIT 1
+                    `,
+                    [id],
+                );
+                const specialistId = String(lookup.rows[0]?.investment_specialist_user_id || '');
+                if (!specialistId || specialistId !== String(userId)) {
+                    res.status(403).json({ error: 'Only Investment department or assigned specialist can submit this study' });
+                    return;
+                }
             }
 
             const updated = await pool.query(
