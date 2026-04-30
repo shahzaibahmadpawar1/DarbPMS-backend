@@ -1,0 +1,148 @@
+import pool from '../config/database';
+
+let investmentOpportunitiesSchemaReady = false;
+
+export type OpportunityType = 'rent' | 'operation' | 'investment' | 'ownership';
+export type ClientType = 'individual' | 'establishment' | 'company';
+export type StreetType = 'main' | 'secondary' | 'neighbourhood';
+export type LocationStatus = 'ready' | 'underconstruction' | 'renovation' | 'land';
+export type OpportunityStatus = 'draft' | 'forwarded_to_specialist';
+export type StudyStatus = 'draft' | 'submitted_to_committee';
+export type CommitteeDepartment = 'project' | 'operation' | 'realestate' | 'investment' | 'finance';
+
+export const COMMITTEE_DEPARTMENTS: CommitteeDepartment[] = ['project', 'operation', 'realestate', 'investment', 'finance'];
+
+export const ensureInvestmentOpportunitiesSchema = async (): Promise<void> => {
+    if (investmentOpportunitiesSchemaReady) return;
+
+    await pool.query(`CREATE EXTENSION IF NOT EXISTS "uuid-ossp";`);
+
+    await pool.query(`
+        CREATE TABLE IF NOT EXISTS investment_clients (
+            id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+            name VARCHAR(255) NOT NULL,
+            id_cr_number VARCHAR(100) NOT NULL,
+            client_type VARCHAR(20) NOT NULL CHECK (client_type IN ('individual','establishment','company')),
+            phone VARCHAR(50),
+            contact_person_name VARCHAR(255),
+            contact_person_mobile VARCHAR(50),
+            email VARCHAR(255),
+            address TEXT,
+            note TEXT,
+            created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+            created_by UUID REFERENCES users(id) ON DELETE SET NULL,
+            updated_by UUID REFERENCES users(id) ON DELETE SET NULL
+        );
+    `);
+
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_investment_clients_name ON investment_clients(name);`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_investment_clients_idcr ON investment_clients(id_cr_number);`);
+
+    await pool.query(`
+        CREATE TABLE IF NOT EXISTS investment_opportunities (
+            id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+            opportunity_date DATE NOT NULL,
+            opportunity_type VARCHAR(20) NOT NULL CHECK (opportunity_type IN ('rent','operation','investment','ownership')),
+            client_id UUID NOT NULL REFERENCES investment_clients(id) ON DELETE RESTRICT,
+            region VARCHAR(100),
+            city VARCHAR(100),
+            district VARCHAR(100),
+            street VARCHAR(255),
+            street_type VARCHAR(20) CHECK (street_type IN ('main','secondary','neighbourhood')),
+            station_name_if_exists VARCHAR(255),
+            location_status VARCHAR(20) CHECK (location_status IN ('ready','underconstruction','renovation','land')),
+            area_m2 DECIMAL(12,2),
+            frontage_m DECIMAL(12,2),
+            depth_m DECIMAL(12,2),
+            location_url TEXT,
+            issued_licenses TEXT,
+            pending_licenses TEXT,
+            investment_specialist_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+            notes TEXT,
+            status VARCHAR(30) NOT NULL DEFAULT 'forwarded_to_specialist'
+                CHECK (status IN ('draft','forwarded_to_specialist')),
+            created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+            created_by UUID REFERENCES users(id) ON DELETE SET NULL,
+            updated_by UUID REFERENCES users(id) ON DELETE SET NULL
+        );
+    `);
+
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_inv_opps_date ON investment_opportunities(opportunity_date);`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_inv_opps_type ON investment_opportunities(opportunity_type);`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_inv_opps_client ON investment_opportunities(client_id);`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_inv_opps_specialist ON investment_opportunities(investment_specialist_user_id);`);
+
+    await pool.query(`
+        CREATE TABLE IF NOT EXISTS investment_opportunity_attachments (
+            id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+            opportunity_id UUID NOT NULL REFERENCES investment_opportunities(id) ON DELETE CASCADE,
+            kind VARCHAR(30) NOT NULL CHECK (kind IN (
+                'id_photo','commercial_register','tax_number','national_address','deed',
+                'licenses','certificates','contracts','other'
+            )),
+            file_name VARCHAR(255),
+            file_url TEXT NOT NULL,
+            created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+            created_by UUID REFERENCES users(id) ON DELETE SET NULL
+        );
+    `);
+
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_inv_opp_attach_opp ON investment_opportunity_attachments(opportunity_id);`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_inv_opp_attach_kind ON investment_opportunity_attachments(kind);`);
+
+    await pool.query(`
+        CREATE TABLE IF NOT EXISTS investment_feasibility_studies (
+            id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+            opportunity_id UUID NOT NULL REFERENCES investment_opportunities(id) ON DELETE CASCADE,
+            study_status VARCHAR(50) NOT NULL DEFAULT 'Initial',
+            expected_property_income JSONB NOT NULL DEFAULT '{}'::jsonb,
+            product_sales JSONB NOT NULL DEFAULT '{}'::jsonb,
+            expenses JSONB NOT NULL DEFAULT '{}'::jsonb,
+            final_result JSONB NOT NULL DEFAULT '{}'::jsonb,
+            initial_agreement_notes TEXT,
+            status VARCHAR(30) NOT NULL DEFAULT 'draft'
+                CHECK (status IN ('draft','submitted_to_committee')),
+            created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+            created_by UUID REFERENCES users(id) ON DELETE SET NULL,
+            updated_by UUID REFERENCES users(id) ON DELETE SET NULL
+        );
+    `);
+
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_inv_studies_opp ON investment_feasibility_studies(opportunity_id);`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_inv_studies_status ON investment_feasibility_studies(status);`);
+
+    await pool.query(`
+        CREATE TABLE IF NOT EXISTS investment_feasibility_attachments (
+            id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+            study_id UUID NOT NULL REFERENCES investment_feasibility_studies(id) ON DELETE CASCADE,
+            file_name VARCHAR(255),
+            file_url TEXT NOT NULL,
+            created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+            created_by UUID REFERENCES users(id) ON DELETE SET NULL
+        );
+    `);
+
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_inv_study_attach_study ON investment_feasibility_attachments(study_id);`);
+
+    await pool.query(`
+        CREATE TABLE IF NOT EXISTS investment_committee_opinions (
+            id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+            study_id UUID NOT NULL REFERENCES investment_feasibility_studies(id) ON DELETE CASCADE,
+            department VARCHAR(20) NOT NULL CHECK (department IN ('project','operation','realestate','investment','finance')),
+            opinion_payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+            submitted_by UUID REFERENCES users(id) ON DELETE SET NULL,
+            submitted_at TIMESTAMP WITH TIME ZONE,
+            updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE (study_id, department)
+        );
+    `);
+
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_inv_opinions_study ON investment_committee_opinions(study_id);`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_inv_opinions_dept ON investment_committee_opinions(department);`);
+
+    investmentOpportunitiesSchemaReady = true;
+};
+

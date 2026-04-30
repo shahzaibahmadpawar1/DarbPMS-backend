@@ -86,5 +86,41 @@ export class UsersController {
             res.status(500).json({ error: 'Failed to fetch department managers', details: error.message });
         }
     }
+
+    static async search(req: AuthRequest, res: Response): Promise<void> {
+        try {
+            const userId = req.user?.id;
+            if (!userId) {
+                res.status(401).json({ error: 'Unauthorized' });
+                return;
+            }
+
+            const query = String(req.query?.query || '').trim().toLowerCase();
+            const limitRaw = Number.parseInt(String(req.query?.limit || '50'), 10);
+            const limit = Number.isFinite(limitRaw) ? Math.min(Math.max(limitRaw, 1), 200) : 50;
+
+            const params: any[] = [];
+            let where = '';
+            if (query) {
+                params.push(`%${query}%`);
+                where = `WHERE lower(username) LIKE $1 OR lower(email) LIKE $1`;
+            }
+
+            const result = await pool.query(
+                `
+                    SELECT id, username, role, department, email
+                    FROM users
+                    ${where}
+                    ORDER BY username ASC
+                    LIMIT ${limit}
+                `,
+                params,
+            );
+
+            res.status(200).json({ data: result.rows });
+        } catch (error: any) {
+            res.status(500).json({ error: 'Failed to search users', details: error.message });
+        }
+    }
 }
 
