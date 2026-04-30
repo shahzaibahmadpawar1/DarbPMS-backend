@@ -6,6 +6,14 @@ const router = Router();
 
 router.use(authenticateToken);
 
+// Location settings (Regions/Cities)
+router.get('/locations/regions', requireCapability('view'), InvestmentWorkflowController.listRegions);
+router.post('/locations/regions', requireCapability('manage_users'), InvestmentWorkflowController.createRegion);
+router.delete('/locations/regions/:id', requireCapability('manage_users'), InvestmentWorkflowController.deleteRegion);
+router.get('/locations/cities', requireCapability('view'), InvestmentWorkflowController.listCities);
+router.post('/locations/cities', requireCapability('manage_users'), InvestmentWorkflowController.createCity);
+router.delete('/locations/cities/:id', requireCapability('manage_users'), InvestmentWorkflowController.deleteCity);
+
 // Clients
 router.get('/clients', requireCapability('view'), InvestmentWorkflowController.listClients);
 router.post('/clients', requireCapability('create'), InvestmentWorkflowController.createClient);

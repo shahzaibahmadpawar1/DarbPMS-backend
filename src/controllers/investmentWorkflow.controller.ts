@@ -27,7 +27,169 @@ const normalizeCommitteeDepartment = (value: unknown): CommitteeDepartment | nul
     return COMMITTEE_DEPARTMENTS.includes(raw as any) ? (raw as CommitteeDepartment) : null;
 };
 
+const requireSuperAdminOnly = (req: AuthRequest): boolean => {
+    const role = req.user?.role;
+    return role === 'super_admin';
+};
+
 export class InvestmentWorkflowController {
+    // -------------------- Location settings (Regions/Cities) --------------------
+    static async listRegions(req: AuthRequest, res: Response): Promise<void> {
+        try {
+            await ensureInvestmentOpportunitiesSchema();
+            const result = await pool.query(
+                `SELECT id, name FROM investment_location_regions ORDER BY name ASC`,
+            );
+            res.status(200).json({ data: result.rows });
+        } catch (error: any) {
+            res.status(500).json({ error: 'Failed to list regions', details: error.message });
+        }
+    }
+
+    static async createRegion(req: AuthRequest, res: Response): Promise<void> {
+        try {
+            await ensureInvestmentOpportunitiesSchema();
+            const userId = req.user?.id;
+            if (!userId) {
+                res.status(401).json({ error: 'Unauthorized' });
+                return;
+            }
+            if (!requireSuperAdminOnly(req)) {
+                res.status(403).json({ error: 'Only Super Admin can manage regions' });
+                return;
+            }
+            const name = String(req.body?.name || '').trim();
+            if (!name) {
+                res.status(400).json({ error: 'name is required' });
+                return;
+            }
+            const inserted = await pool.query(
+                `
+                    INSERT INTO investment_location_regions (name, created_by)
+                    VALUES ($1, $2)
+                    ON CONFLICT (name) DO NOTHING
+                    RETURNING id, name
+                `,
+                [name, userId],
+            );
+            if (!inserted.rows.length) {
+                const existing = await pool.query(`SELECT id, name FROM investment_location_regions WHERE name = $1 LIMIT 1`, [name]);
+                res.status(200).json({ data: existing.rows[0] });
+                return;
+            }
+            res.status(201).json({ data: inserted.rows[0] });
+        } catch (error: any) {
+            res.status(500).json({ error: 'Failed to create region', details: error.message });
+        }
+    }
+
+    static async deleteRegion(req: AuthRequest, res: Response): Promise<void> {
+        try {
+            await ensureInvestmentOpportunitiesSchema();
+            const userId = req.user?.id;
+            if (!userId) {
+                res.status(401).json({ error: 'Unauthorized' });
+                return;
+            }
+            if (!requireSuperAdminOnly(req)) {
+                res.status(403).json({ error: 'Only Super Admin can manage regions' });
+                return;
+            }
+            const id = String(req.params?.id || '').trim();
+            if (!id) {
+                res.status(400).json({ error: 'id is required' });
+                return;
+            }
+            await pool.query(`DELETE FROM investment_location_regions WHERE id = $1`, [id]);
+            res.status(200).json({ success: true });
+        } catch (error: any) {
+            res.status(500).json({ error: 'Failed to delete region', details: error.message });
+        }
+    }
+
+    static async listCities(req: AuthRequest, res: Response): Promise<void> {
+        try {
+            await ensureInvestmentOpportunitiesSchema();
+            const regionId = String(req.query?.regionId || '').trim();
+            if (!regionId) {
+                res.status(400).json({ error: 'regionId is required' });
+                return;
+            }
+            const result = await pool.query(
+                `SELECT id, name, region_id FROM investment_location_cities WHERE region_id = $1 ORDER BY name ASC`,
+                [regionId],
+            );
+            res.status(200).json({ data: result.rows });
+        } catch (error: any) {
+            res.status(500).json({ error: 'Failed to list cities', details: error.message });
+        }
+    }
+
+    static async createCity(req: AuthRequest, res: Response): Promise<void> {
+        try {
+            await ensureInvestmentOpportunitiesSchema();
+            const userId = req.user?.id;
+            if (!userId) {
+                res.status(401).json({ error: 'Unauthorized' });
+                return;
+            }
+            if (!requireSuperAdminOnly(req)) {
+                res.status(403).json({ error: 'Only Super Admin can manage cities' });
+                return;
+            }
+            const regionId = String(req.body?.regionId || '').trim();
+            const name = String(req.body?.name || '').trim();
+            if (!regionId || !name) {
+                res.status(400).json({ error: 'regionId and name are required' });
+                return;
+            }
+            const inserted = await pool.query(
+                `
+                    INSERT INTO investment_location_cities (region_id, name, created_by)
+                    VALUES ($1, $2, $3)
+                    ON CONFLICT (region_id, name) DO NOTHING
+                    RETURNING id, name, region_id
+                `,
+                [regionId, name, userId],
+            );
+            if (!inserted.rows.length) {
+                const existing = await pool.query(
+                    `SELECT id, name, region_id FROM investment_location_cities WHERE region_id = $1 AND name = $2 LIMIT 1`,
+                    [regionId, name],
+                );
+                res.status(200).json({ data: existing.rows[0] });
+                return;
+            }
+            res.status(201).json({ data: inserted.rows[0] });
+        } catch (error: any) {
+            res.status(500).json({ error: 'Failed to create city', details: error.message });
+        }
+    }
+
+    static async deleteCity(req: AuthRequest, res: Response): Promise<void> {
+        try {
+            await ensureInvestmentOpportunitiesSchema();
+            const userId = req.user?.id;
+            if (!userId) {
+                res.status(401).json({ error: 'Unauthorized' });
+                return;
+            }
+            if (!requireSuperAdminOnly(req)) {
+                res.status(403).json({ error: 'Only Super Admin can manage cities' });
+                return;
+            }
+            const id = String(req.params?.id || '').trim();
+            if (!id) {
+                res.status(400).json({ error: 'id is required' });
+                return;
+            }
+            await pool.query(`DELETE FROM investment_location_cities WHERE id = $1`, [id]);
+            res.status(200).json({ success: true });
+        } catch (error: any) {
+            res.status(500).json({ error: 'Failed to delete city', details: error.message });
+        }
+    }
+
     // -------------------- Clients --------------------
     static async listClients(req: AuthRequest, res: Response): Promise<void> {
         try {

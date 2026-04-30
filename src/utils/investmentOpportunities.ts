@@ -17,6 +17,27 @@ export const ensureInvestmentOpportunitiesSchema = async (): Promise<void> => {
 
     await pool.query(`CREATE EXTENSION IF NOT EXISTS "uuid-ossp";`);
 
+    // Location settings (regions/cities) used by Opportunities form
+    await pool.query(`
+        CREATE TABLE IF NOT EXISTS investment_location_regions (
+            id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+            name VARCHAR(120) NOT NULL UNIQUE,
+            created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+            created_by UUID REFERENCES users(id) ON DELETE SET NULL
+        );
+    `);
+    await pool.query(`
+        CREATE TABLE IF NOT EXISTS investment_location_cities (
+            id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+            region_id UUID NOT NULL REFERENCES investment_location_regions(id) ON DELETE CASCADE,
+            name VARCHAR(120) NOT NULL,
+            created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+            created_by UUID REFERENCES users(id) ON DELETE SET NULL,
+            UNIQUE (region_id, name)
+        );
+    `);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_inv_location_cities_region ON investment_location_cities(region_id);`);
+
     await pool.query(`
         CREATE TABLE IF NOT EXISTS investment_clients (
             id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
