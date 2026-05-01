@@ -894,6 +894,8 @@ export class InvestmentWorkflowController {
                         pending_licenses: row.pending_licenses,
                         specialist_username: row.specialist_username,
                         specialist_display_name: row.specialist_display_name,
+                        /** For client-side submit permission only; not shown in read-only detail UI. */
+                        investment_specialist_user_id: row.investment_specialist_user_id,
                         notes: row.notes,
                         status: row.status,
                     },
