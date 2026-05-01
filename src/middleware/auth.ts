@@ -10,7 +10,7 @@ const roleRank: Record<UserRole, number> = {
     supervisor: 2,
     department_manager: 3,
     super_admin: 4,
-    ceo: 1
+    ceo: 5
 };
 
 type Capability = 'view' | 'create' | 'edit' | 'delete' | 'manage_users';
