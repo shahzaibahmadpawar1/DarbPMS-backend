@@ -15,6 +15,13 @@ const requireInvestmentOrSuperAdmin = (req: AuthRequest): boolean => {
     return role === 'super_admin' || role === 'ceo' || dept === 'investment';
 };
 
+/** Investment or Franchise department, or executives (for opportunities / shared workflow). */
+const requireInvestmentFranchiseOrExec = (req: AuthRequest): boolean => {
+    const role = req.user?.role;
+    const dept = req.user?.department;
+    return role === 'super_admin' || role === 'ceo' || dept === 'investment' || dept === 'franchise';
+};
+
 const requireCommitteeDmOrSuperAdmin = (req: AuthRequest): boolean => {
     const role = req.user?.role;
     const dept = req.user?.department;
@@ -226,8 +233,8 @@ export class InvestmentWorkflowController {
                 return;
             }
 
-            if (!requireInvestmentOrSuperAdmin(req)) {
-                res.status(403).json({ error: 'Only Investment department can create clients' });
+            if (!requireInvestmentFranchiseOrExec(req)) {
+                res.status(403).json({ error: 'Only Investment or Franchise department can create clients' });
                 return;
             }
 
@@ -419,8 +426,8 @@ export class InvestmentWorkflowController {
                 return;
             }
 
-            if (!requireInvestmentOrSuperAdmin(req)) {
-                res.status(403).json({ error: 'Only Investment department can create opportunities' });
+            if (!requireInvestmentFranchiseOrExec(req)) {
+                res.status(403).json({ error: 'Only Investment or Franchise department can create opportunities' });
                 return;
             }
 
@@ -439,6 +446,10 @@ export class InvestmentWorkflowController {
             }
 
             const specialistUserId = String(req.body?.investmentSpecialistUserId || '').trim() || null;
+            if (!specialistUserId) {
+                res.status(400).json({ error: 'investmentSpecialistUserId is required' });
+                return;
+            }
             const streetType = String(req.body?.streetType || '').trim().toLowerCase() || null;
             const locationStatus = String(req.body?.locationStatus || '').trim().toLowerCase() || null;
 
@@ -484,7 +495,7 @@ export class InvestmentWorkflowController {
                     String(req.body?.pendingLicenses || '').trim() || null,
                     specialistUserId,
                     String(req.body?.notes || '').trim() || null,
-                    specialistUserId ? 'forwarded_to_specialist' : 'draft',
+                    'forwarded_to_specialist',
                     userId,
                 ],
             );
@@ -512,9 +523,24 @@ export class InvestmentWorkflowController {
     }
 
     // -------------------- Studies --------------------
-    static async listStudies(_req: AuthRequest, res: Response): Promise<void> {
+    static async listStudies(req: AuthRequest, res: Response): Promise<void> {
         try {
             await ensureInvestmentOpportunitiesSchema();
+
+            const userId = req.user?.id;
+            if (!userId) {
+                res.status(401).json({ error: 'Unauthorized' });
+                return;
+            }
+
+            const role = req.user?.role;
+            const dept = req.user?.department;
+            const baseParams: any[] = [];
+            let where = '';
+            if (!(role === 'super_admin' || role === 'ceo' || dept === 'investment')) {
+                where = 'WHERE o.investment_specialist_user_id = $1';
+                baseParams.push(userId);
+            }
 
             const result = await pool.query(
                 `
@@ -528,9 +554,11 @@ export class InvestmentWorkflowController {
                     FROM investment_feasibility_studies s
                     JOIN investment_opportunities o ON o.id = s.opportunity_id
                     JOIN investment_clients c ON c.id = o.client_id
+                    ${where}
                     ORDER BY s.created_at DESC
                     LIMIT 500
                 `,
+                baseParams,
             );
             res.status(200).json({ data: result.rows });
         } catch (error: any) {
@@ -555,17 +583,21 @@ export class InvestmentWorkflowController {
                 return;
             }
 
-            // Allow Investment dept / executives OR the assigned specialist for this opportunity
-            if (!requireInvestmentOrSuperAdmin(req)) {
-                const opp = await pool.query(
-                    `SELECT investment_specialist_user_id FROM investment_opportunities WHERE id = $1 LIMIT 1`,
-                    [opportunityId],
-                );
-                const specialistId = String(opp.rows[0]?.investment_specialist_user_id || '');
-                if (!specialistId || specialistId !== String(userId)) {
-                    res.status(403).json({ error: 'Only Investment department or assigned specialist can save this study' });
-                    return;
-                }
+            const opp = await pool.query(
+                `SELECT investment_specialist_user_id FROM investment_opportunities WHERE id = $1 LIMIT 1`,
+                [opportunityId],
+            );
+            if (!opp.rows.length) {
+                res.status(404).json({ error: 'Opportunity not found' });
+                return;
+            }
+            const specialistId = String(opp.rows[0]?.investment_specialist_user_id || '');
+            const role = req.user?.role;
+            const exec = role === 'super_admin' || role === 'ceo';
+            const assigneeMatch = Boolean(specialistId && specialistId === String(userId));
+            if (!exec && !assigneeMatch) {
+                res.status(403).json({ error: 'Only the assigned investment specialist or an executive can save this study' });
+                return;
             }
 
             const studyStatus = String(req.body?.studyStatus || 'Initial').trim() || 'Initial';
@@ -653,10 +685,6 @@ export class InvestmentWorkflowController {
                 res.status(401).json({ error: 'Unauthorized' });
                 return;
             }
-            if (!requireInvestmentOrSuperAdmin(req)) {
-                res.status(403).json({ error: 'Only Investment department can submit studies' });
-                return;
-            }
 
             const id = String(req.params?.id || '').trim();
             if (!id) {
@@ -664,22 +692,27 @@ export class InvestmentWorkflowController {
                 return;
             }
 
-            if (!requireInvestmentOrSuperAdmin(req)) {
-                const lookup = await pool.query(
-                    `
-                        SELECT s.opportunity_id, o.investment_specialist_user_id
-                        FROM investment_feasibility_studies s
-                        JOIN investment_opportunities o ON o.id = s.opportunity_id
-                        WHERE s.id = $1
-                        LIMIT 1
-                    `,
-                    [id],
-                );
-                const specialistId = String(lookup.rows[0]?.investment_specialist_user_id || '');
-                if (!specialistId || specialistId !== String(userId)) {
-                    res.status(403).json({ error: 'Only Investment department or assigned specialist can submit this study' });
-                    return;
-                }
+            const lookup = await pool.query(
+                `
+                    SELECT s.opportunity_id, o.investment_specialist_user_id
+                    FROM investment_feasibility_studies s
+                    JOIN investment_opportunities o ON o.id = s.opportunity_id
+                    WHERE s.id = $1
+                    LIMIT 1
+                `,
+                [id],
+            );
+            if (!lookup.rows.length) {
+                res.status(404).json({ error: 'Study not found' });
+                return;
+            }
+            const specialistId = String(lookup.rows[0]?.investment_specialist_user_id || '');
+            const role = req.user?.role;
+            const exec = role === 'super_admin' || role === 'ceo';
+            const assigneeMatch = Boolean(specialistId && specialistId === String(userId));
+            if (!exec && !assigneeMatch) {
+                res.status(403).json({ error: 'Only the assigned investment specialist or an executive can submit this study' });
+                return;
             }
 
             const updated = await pool.query(
