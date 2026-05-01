@@ -803,10 +803,13 @@ export class InvestmentWorkflowController {
                            c.contact_person_mobile AS client_contact_person_mobile,
                            c.email AS client_email,
                            c.address AS client_address,
-                           c.note AS client_note
+                           c.note AS client_note,
+                           su.username AS specialist_username,
+                           COALESCE(NULLIF(TRIM(su.full_name), ''), su.username) AS specialist_display_name
                     FROM investment_feasibility_studies s
                     JOIN investment_opportunities o ON o.id = s.opportunity_id
                     JOIN investment_clients c ON c.id = o.client_id
+                    LEFT JOIN users su ON su.id = o.investment_specialist_user_id
                     WHERE s.id = $1
                     LIMIT 1
                 `,
@@ -849,10 +852,11 @@ export class InvestmentWorkflowController {
             );
             const opinions = await pool.query(
                 `
-                    SELECT *
-                    FROM investment_committee_opinions
-                    WHERE study_id = $1
-                    ORDER BY department ASC
+                    SELECT op.*, u.username AS submitted_by_username
+                    FROM investment_committee_opinions op
+                    LEFT JOIN users u ON u.id = op.submitted_by
+                    WHERE op.study_id = $1
+                    ORDER BY op.department ASC
                 `,
                 [id],
             );
@@ -873,7 +877,6 @@ export class InvestmentWorkflowController {
                         updated_at: row.updated_at,
                     },
                     opportunity: {
-                        id: row.opportunity_id,
                         opportunity_date: row.opportunity_date,
                         opportunity_type: row.opportunity_type,
                         region: row.region,
@@ -889,7 +892,8 @@ export class InvestmentWorkflowController {
                         location_url: row.location_url,
                         issued_licenses: row.issued_licenses,
                         pending_licenses: row.pending_licenses,
-                        investment_specialist_user_id: row.investment_specialist_user_id,
+                        specialist_username: row.specialist_username,
+                        specialist_display_name: row.specialist_display_name,
                         notes: row.notes,
                         status: row.status,
                     },
