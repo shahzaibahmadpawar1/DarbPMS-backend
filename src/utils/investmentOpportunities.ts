@@ -9,6 +9,13 @@ export type LocationStatus = 'ready' | 'underconstruction' | 'renovation' | 'lan
 export type OpportunityStatus = 'draft' | 'forwarded_to_specialist';
 export type StudyStatus = 'draft' | 'submitted_to_committee';
 export type CommitteeDepartment = 'project' | 'operation' | 'realestate' | 'investment' | 'finance';
+export type OpportunityWorkflowStatus =
+    | 'new'
+    | 'under_study'
+    | 'awaiting_ceo_decision'
+    | 'contract_in_progress'
+    | 'awaiting_ceo_final_approval'
+    | 'approved';
 
 export const COMMITTEE_DEPARTMENTS: CommitteeDepartment[] = ['project', 'operation', 'realestate', 'investment', 'finance'];
 
@@ -83,6 +90,22 @@ export const ensureInvestmentOpportunitiesSchema = async (): Promise<void> => {
             notes TEXT,
             status VARCHAR(30) NOT NULL DEFAULT 'forwarded_to_specialist'
                 CHECK (status IN ('draft','forwarded_to_specialist')),
+            workflow_status VARCHAR(40) NOT NULL DEFAULT 'new'
+                CHECK (workflow_status IN (
+                    'new',
+                    'under_study',
+                    'awaiting_ceo_decision',
+                    'contract_in_progress',
+                    'awaiting_ceo_final_approval',
+                    'approved'
+                )),
+            contract_department VARCHAR(20)
+                CHECK (contract_department IN ('project','operation','realestate','investment','finance')),
+            contract_manager_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+            contract_submitted_at TIMESTAMP WITH TIME ZONE,
+            contract_form_data JSONB NOT NULL DEFAULT '{}'::jsonb,
+            ceo_decision_at TIMESTAMP WITH TIME ZONE,
+            ceo_approved_at TIMESTAMP WITH TIME ZONE,
             created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
             created_by UUID REFERENCES users(id) ON DELETE SET NULL,
@@ -94,6 +117,31 @@ export const ensureInvestmentOpportunitiesSchema = async (): Promise<void> => {
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_inv_opps_type ON investment_opportunities(opportunity_type);`);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_inv_opps_client ON investment_opportunities(client_id);`);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_inv_opps_specialist ON investment_opportunities(investment_specialist_user_id);`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_inv_opps_workflow_status ON investment_opportunities(workflow_status);`);
+
+    // Migration-safe alters for existing deployments
+    await pool.query(`
+        ALTER TABLE investment_opportunities
+            ADD COLUMN IF NOT EXISTS workflow_status VARCHAR(40) NOT NULL DEFAULT 'new'
+                CHECK (workflow_status IN (
+                    'new',
+                    'under_study',
+                    'awaiting_ceo_decision',
+                    'contract_in_progress',
+                    'awaiting_ceo_final_approval',
+                    'approved'
+                ));
+    `);
+    await pool.query(`
+        ALTER TABLE investment_opportunities
+            ADD COLUMN IF NOT EXISTS contract_department VARCHAR(20)
+                CHECK (contract_department IN ('project','operation','realestate','investment','finance'));
+    `);
+    await pool.query(`ALTER TABLE investment_opportunities ADD COLUMN IF NOT EXISTS contract_manager_user_id UUID REFERENCES users(id) ON DELETE SET NULL;`);
+    await pool.query(`ALTER TABLE investment_opportunities ADD COLUMN IF NOT EXISTS contract_submitted_at TIMESTAMP WITH TIME ZONE;`);
+    await pool.query(`ALTER TABLE investment_opportunities ADD COLUMN IF NOT EXISTS contract_form_data JSONB NOT NULL DEFAULT '{}'::jsonb;`);
+    await pool.query(`ALTER TABLE investment_opportunities ADD COLUMN IF NOT EXISTS ceo_decision_at TIMESTAMP WITH TIME ZONE;`);
+    await pool.query(`ALTER TABLE investment_opportunities ADD COLUMN IF NOT EXISTS ceo_approved_at TIMESTAMP WITH TIME ZONE;`);
 
     await pool.query(`
         CREATE TABLE IF NOT EXISTS investment_opportunity_attachments (

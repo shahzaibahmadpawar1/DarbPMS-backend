@@ -201,23 +201,72 @@ export const getAllStationInformation = async (req: Request, res: Response): Pro
             conditions.push(`city ILIKE $${params.length}`);
         }
 
-        let query = `
+        const stationQuery = `
             SELECT * FROM station_information
             ${conditions.length ? `WHERE ${conditions.join(' AND ')}` : ''}
             ORDER BY created_at DESC
         `;
+        const result = await pool.query(stationQuery, params);
 
-        if (usePagination && safeLimit !== null) {
-            params.push(safeLimit, safeOffset);
-            query += ` LIMIT $${params.length - 1} OFFSET $${params.length}`;
+        const approvedOppParams: unknown[] = [];
+        const oppConditions: string[] = [`o.workflow_status = 'approved'`];
+
+        if (statusFilter) {
+            approvedOppParams.push(String(statusFilter).trim().toLowerCase());
+            oppConditions.push(`lower('operational') = $${approvedOppParams.length}`);
+        }
+        if (typeFilter) {
+            const normalizedType = normalizeStationType(typeFilter);
+            if (normalizedType) {
+                approvedOppParams.push(normalizedType);
+                oppConditions.push(`lower(o.opportunity_type) = $${approvedOppParams.length}`);
+            }
+        }
+        if (cityFilter) {
+            approvedOppParams.push(`%${String(cityFilter).trim()}%`);
+            oppConditions.push(`o.city ILIKE $${approvedOppParams.length}`);
+        }
+        if (userRole !== 'super_admin' && userRole !== 'ceo' && userDepartment && String(userDepartment).trim().toLowerCase() !== 'project') {
+            approvedOppParams.push(String(userDepartment).trim().toLowerCase());
+            oppConditions.push(`lower(o.opportunity_type) = $${approvedOppParams.length}`);
         }
 
-        const result = await pool.query(query, params);
+        const approvedOppQuery = `
+            SELECT
+                o.id::text AS id,
+                o.id::text AS station_code,
+                COALESCE(NULLIF(o.station_name_if_exists, ''), c.name) AS station_name,
+                o.region AS area_region,
+                o.city,
+                o.district,
+                o.street,
+                o.location_url AS geographic_location,
+                o.opportunity_type AS station_type_code,
+                'Operational'::text AS station_status_code,
+                o.created_at,
+                o.updated_at,
+                'Approved'::text AS review_status
+            FROM investment_opportunities o
+            JOIN investment_clients c ON c.id = o.client_id
+            WHERE ${oppConditions.join(' AND ')}
+            ORDER BY o.created_at DESC
+        `;
+        const approvedOppResult = await pool.query(approvedOppQuery, approvedOppParams);
+
+        const combined = [...result.rows, ...approvedOppResult.rows]
+            .sort((a: any, b: any) => {
+                const ta = new Date(a?.created_at || 0).getTime();
+                const tb = new Date(b?.created_at || 0).getTime();
+                return tb - ta;
+            });
+        const paged = usePagination && safeLimit !== null
+            ? combined.slice(safeOffset, safeOffset + safeLimit)
+            : combined;
 
         res.status(200).json({
             message: 'Station information retrieved successfully',
-            data: result.rows,
-            count: result.rows.length
+            data: paged,
+            count: paged.length
         });
     } catch (error) {
         if (isSchemaCompatibilityError(error)) {
@@ -262,9 +311,40 @@ export const getStationInformationByCode = async (req: Request, res: Response): 
         const result = await pool.query(query, [stationCode]);
 
         if (result.rows.length === 0) {
-            res.status(404).json({
-                error: 'Station not found',
-                identifier: stationCode
+            const approvedOpp = await pool.query(
+                `
+                    SELECT
+                        o.id::text AS id,
+                        o.id::text AS station_code,
+                        COALESCE(NULLIF(o.station_name_if_exists, ''), c.name) AS station_name,
+                        o.region AS area_region,
+                        o.city,
+                        o.district,
+                        o.street,
+                        o.location_url AS geographic_location,
+                        o.opportunity_type AS station_type_code,
+                        'Operational'::text AS station_status_code,
+                        o.created_at,
+                        o.updated_at,
+                        'Approved'::text AS review_status
+                    FROM investment_opportunities o
+                    JOIN investment_clients c ON c.id = o.client_id
+                    WHERE o.workflow_status = 'approved'
+                      AND (o.id::text = $1)
+                    LIMIT 1
+                `,
+                [stationCode],
+            );
+            if (!approvedOpp.rows.length) {
+                res.status(404).json({
+                    error: 'Station not found',
+                    identifier: stationCode
+                });
+                return;
+            }
+            res.status(200).json({
+                message: 'Station information retrieved successfully',
+                data: approvedOpp.rows[0]
             });
             return;
         }

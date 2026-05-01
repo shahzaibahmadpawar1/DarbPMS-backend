@@ -39,6 +39,11 @@ const requireSuperAdminOnly = (req: AuthRequest): boolean => {
     return role === 'super_admin';
 };
 
+const isExecutive = (req: AuthRequest): boolean => {
+    const role = req.user?.role;
+    return role === 'super_admin' || role === 'ceo';
+};
+
 export class InvestmentWorkflowController {
     // -------------------- Location settings (Regions/Cities) --------------------
     static async listRegions(req: AuthRequest, res: Response): Promise<void> {
@@ -308,8 +313,8 @@ export class InvestmentWorkflowController {
             const baseParams: any[] = [];
             let where = '';
             if (!(role === 'super_admin' || role === 'ceo' || req.user?.department === 'investment')) {
-                // Specialists: only see those assigned to them
-                where = `WHERE o.investment_specialist_user_id = $1`;
+                // Specialists and assigned contract manager: only see those assigned to them
+                where = `WHERE o.investment_specialist_user_id = $1 OR o.contract_manager_user_id = $1`;
                 baseParams.push(userId);
             }
 
@@ -334,7 +339,19 @@ export class InvestmentWorkflowController {
                             SELECT COUNT(*)::int
                             FROM investment_feasibility_studies s2
                             WHERE s2.opportunity_id = o.id AND s2.status = 'submitted_to_committee'
-                        ) AS submitted_studies_count
+                        ) AS submitted_studies_count,
+                        (
+                            SELECT COUNT(*)::int
+                            FROM investment_committee_opinions op
+                            WHERE op.study_id = (
+                                SELECT s3.id
+                                FROM investment_feasibility_studies s3
+                                WHERE s3.opportunity_id = o.id AND s3.status = 'submitted_to_committee'
+                                ORDER BY s3.updated_at DESC, s3.created_at DESC
+                                LIMIT 1
+                            )
+                        ) AS opinions_submitted_count,
+                        ${COMMITTEE_DEPARTMENTS.length}::int AS opinions_required_count
                     FROM investment_opportunities o
                     JOIN investment_clients c ON c.id = o.client_id
                     LEFT JOIN users su ON su.id = o.investment_specialist_user_id
@@ -407,7 +424,8 @@ export class InvestmentWorkflowController {
             const allowed = role === 'super_admin'
                 || role === 'ceo'
                 || req.user?.department === 'investment'
-                || String(opportunity.investment_specialist_user_id || '') === userId;
+                || String(opportunity.investment_specialist_user_id || '') === userId
+                || String(opportunity.contract_manager_user_id || '') === userId;
             if (!allowed) {
                 res.status(403).json({ error: 'Not allowed' });
                 return;
@@ -491,7 +509,7 @@ export class InvestmentWorkflowController {
                         area_m2, frontage_m, depth_m,
                         location_url, issued_licenses, pending_licenses,
                         investment_specialist_user_id,
-                        notes, status,
+                        notes, status, workflow_status,
                         created_by, updated_by
                     ) VALUES (
                         $1,$2,$3,
@@ -500,8 +518,8 @@ export class InvestmentWorkflowController {
                         $11,$12,$13,
                         $14,$15,$16,
                         $17,
-                        $18,$19,
-                        $20,$20
+                        $18,$19,$20,
+                        $21,$21
                     )
                     RETURNING *
                 `,
@@ -525,6 +543,7 @@ export class InvestmentWorkflowController {
                     specialistUserId,
                     String(req.body?.notes || '').trim() || null,
                     'forwarded_to_specialist',
+                    'new',
                     userId,
                 ],
             );
@@ -775,6 +794,20 @@ export class InvestmentWorkflowController {
                 return;
             }
 
+            await pool.query(
+                `
+                    UPDATE investment_opportunities
+                    SET workflow_status = CASE
+                            WHEN workflow_status = 'new' THEN 'under_study'
+                            ELSE workflow_status
+                        END,
+                        updated_by = $1,
+                        updated_at = CURRENT_TIMESTAMP
+                    WHERE id = $2
+                `,
+                [userId, lookup.rows[0]?.opportunity_id],
+            );
+
             res.status(200).json({ data: updated.rows[0] });
         } catch (error: any) {
             res.status(500).json({ error: 'Failed to submit study', details: error.message });
@@ -825,6 +858,13 @@ export class InvestmentWorkflowController {
                         o.investment_specialist_user_id,
                         o.notes,
                         o.status AS opportunity_status_workflow,
+                        o.workflow_status AS opportunity_workflow_status,
+                        o.contract_department,
+                        o.contract_manager_user_id,
+                        o.contract_submitted_at,
+                        o.contract_form_data,
+                        o.ceo_decision_at,
+                        o.ceo_approved_at,
 
                         c.name AS client_name,
                         c.id_cr_number AS client_id_cr_number,
@@ -930,6 +970,13 @@ export class InvestmentWorkflowController {
                         investment_specialist_user_id: row.investment_specialist_user_id,
                         notes: row.notes,
                         status: row.opportunity_status_workflow,
+                        workflow_status: row.opportunity_workflow_status,
+                        contract_department: row.contract_department,
+                        contract_manager_user_id: row.contract_manager_user_id,
+                        contract_submitted_at: row.contract_submitted_at,
+                        contract_form_data: row.contract_form_data,
+                        ceo_decision_at: row.ceo_decision_at,
+                        ceo_approved_at: row.ceo_approved_at,
                     },
                     client: {
                         name: row.client_name,
@@ -1007,9 +1054,207 @@ export class InvestmentWorkflowController {
                 [studyId, deptParam, JSON.stringify(payload), userId],
             );
 
+            const counts = await pool.query(
+                `
+                    SELECT
+                        s.opportunity_id,
+                        (
+                            SELECT COUNT(*)::int
+                            FROM investment_committee_opinions op
+                            WHERE op.study_id = s.id
+                        ) AS submitted_count
+                    FROM investment_feasibility_studies s
+                    WHERE s.id = $1
+                    LIMIT 1
+                `,
+                [studyId],
+            );
+            const row = counts.rows[0];
+            if (row?.opportunity_id && Number(row.submitted_count || 0) >= COMMITTEE_DEPARTMENTS.length) {
+                await pool.query(
+                    `
+                        UPDATE investment_opportunities
+                        SET workflow_status = CASE
+                                WHEN workflow_status IN ('under_study', 'new') THEN 'awaiting_ceo_decision'
+                                ELSE workflow_status
+                            END,
+                            ceo_decision_at = CURRENT_TIMESTAMP,
+                            updated_by = $1,
+                            updated_at = CURRENT_TIMESTAMP
+                        WHERE id = $2
+                    `,
+                    [userId, row.opportunity_id],
+                );
+            }
+
             res.status(200).json({ data: inserted.rows[0] });
         } catch (error: any) {
             res.status(500).json({ error: 'Failed to submit opinion', details: error.message });
+        }
+    }
+
+    static async ceoSendOpportunityToContract(req: AuthRequest, res: Response): Promise<void> {
+        try {
+            await ensureInvestmentOpportunitiesSchema();
+            const userId = req.user?.id;
+            if (!userId) {
+                res.status(401).json({ error: 'Unauthorized' });
+                return;
+            }
+            if (!isExecutive(req)) {
+                res.status(403).json({ error: 'Only CEO or super admin can send opportunity for contract' });
+                return;
+            }
+
+            const opportunityId = String(req.params?.id || '').trim();
+            if (!opportunityId) {
+                res.status(400).json({ error: 'id is required' });
+                return;
+            }
+            const contractDepartment = normalizeCommitteeDepartment(req.body?.contractDepartment);
+            const contractManagerUserId = String(req.body?.contractManagerUserId || '').trim();
+            if (!contractDepartment || !contractManagerUserId) {
+                res.status(400).json({ error: 'contractDepartment and contractManagerUserId are required' });
+                return;
+            }
+
+            const manager = await pool.query(
+                `
+                    SELECT id
+                    FROM users
+                    WHERE id = $1
+                      AND role = 'department_manager'
+                      AND department = $2
+                    LIMIT 1
+                `,
+                [contractManagerUserId, contractDepartment],
+            );
+            if (!manager.rows.length) {
+                res.status(400).json({ error: 'Selected manager does not belong to selected department' });
+                return;
+            }
+
+            const updated = await pool.query(
+                `
+                    UPDATE investment_opportunities
+                    SET workflow_status = 'contract_in_progress',
+                        contract_department = $1,
+                        contract_manager_user_id = $2,
+                        contract_submitted_at = NULL,
+                        contract_form_data = '{}'::jsonb,
+                        ceo_decision_at = CURRENT_TIMESTAMP,
+                        updated_by = $3,
+                        updated_at = CURRENT_TIMESTAMP
+                    WHERE id = $4
+                    RETURNING *
+                `,
+                [contractDepartment, contractManagerUserId, userId, opportunityId],
+            );
+            if (!updated.rows.length) {
+                res.status(404).json({ error: 'Opportunity not found' });
+                return;
+            }
+            res.status(200).json({ data: updated.rows[0] });
+        } catch (error: any) {
+            res.status(500).json({ error: 'Failed to send opportunity for contract', details: error.message });
+        }
+    }
+
+    static async submitOpportunityContract(req: AuthRequest, res: Response): Promise<void> {
+        try {
+            await ensureInvestmentOpportunitiesSchema();
+            const userId = req.user?.id;
+            if (!userId) {
+                res.status(401).json({ error: 'Unauthorized' });
+                return;
+            }
+
+            const opportunityId = String(req.params?.id || '').trim();
+            if (!opportunityId) {
+                res.status(400).json({ error: 'id is required' });
+                return;
+            }
+
+            const opp = await pool.query(
+                `
+                    SELECT contract_manager_user_id, workflow_status
+                    FROM investment_opportunities
+                    WHERE id = $1
+                    LIMIT 1
+                `,
+                [opportunityId],
+            );
+            if (!opp.rows.length) {
+                res.status(404).json({ error: 'Opportunity not found' });
+                return;
+            }
+            const row = opp.rows[0];
+            const allowed = isExecutive(req) || String(row.contract_manager_user_id || '') === String(userId);
+            if (!allowed) {
+                res.status(403).json({ error: 'Only assigned contract manager or executive can submit contract form' });
+                return;
+            }
+            if (String(row.workflow_status || '') !== 'contract_in_progress') {
+                res.status(400).json({ error: 'Opportunity is not in contract stage' });
+                return;
+            }
+
+            const contractFormData = req.body?.contractFormData ?? {};
+            const updated = await pool.query(
+                `
+                    UPDATE investment_opportunities
+                    SET contract_form_data = $1::jsonb,
+                        contract_submitted_at = CURRENT_TIMESTAMP,
+                        workflow_status = 'awaiting_ceo_final_approval',
+                        updated_by = $2,
+                        updated_at = CURRENT_TIMESTAMP
+                    WHERE id = $3
+                    RETURNING *
+                `,
+                [JSON.stringify(contractFormData), userId, opportunityId],
+            );
+            res.status(200).json({ data: updated.rows[0] });
+        } catch (error: any) {
+            res.status(500).json({ error: 'Failed to submit contract form', details: error.message });
+        }
+    }
+
+    static async ceoApproveOpportunity(req: AuthRequest, res: Response): Promise<void> {
+        try {
+            await ensureInvestmentOpportunitiesSchema();
+            const userId = req.user?.id;
+            if (!userId) {
+                res.status(401).json({ error: 'Unauthorized' });
+                return;
+            }
+            if (!isExecutive(req)) {
+                res.status(403).json({ error: 'Only CEO or super admin can approve opportunity' });
+                return;
+            }
+            const opportunityId = String(req.params?.id || '').trim();
+            if (!opportunityId) {
+                res.status(400).json({ error: 'id is required' });
+                return;
+            }
+            const updated = await pool.query(
+                `
+                    UPDATE investment_opportunities
+                    SET workflow_status = 'approved',
+                        ceo_approved_at = CURRENT_TIMESTAMP,
+                        updated_by = $1,
+                        updated_at = CURRENT_TIMESTAMP
+                    WHERE id = $2
+                    RETURNING *
+                `,
+                [userId, opportunityId],
+            );
+            if (!updated.rows.length) {
+                res.status(404).json({ error: 'Opportunity not found' });
+                return;
+            }
+            res.status(200).json({ data: updated.rows[0] });
+        } catch (error: any) {
+            res.status(500).json({ error: 'Failed to approve opportunity', details: error.message });
         }
     }
 

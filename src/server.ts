@@ -930,12 +930,53 @@ app.get('/api/dashboard/stations', authenticateToken, async (req: Request, res: 
 
         const stationQuery = buildDashboardStationQuery(bucket, departmentType, stationType);
         const result = await pool.query(stationQuery.text, stationQuery.params);
+        const rows = [...result.rows];
+
+        const bucketAllowsApprovedOpp = bucket === 'total-stations'
+            || bucket === 'operational-stations'
+            || bucket === 'new-stations';
+        if (bucketAllowsApprovedOpp) {
+            const oppParams: unknown[] = [];
+            const oppWhere: string[] = [`o.workflow_status = 'approved'`];
+            if (departmentType) {
+                oppParams.push(departmentType);
+                oppWhere.push(`lower(o.opportunity_type) = $${oppParams.length}`);
+            }
+            if (stationType) {
+                oppParams.push(stationType);
+                oppWhere.push(`lower(o.opportunity_type) = $${oppParams.length}`);
+            }
+            if (bucket === 'new-stations') {
+                oppWhere.push(`o.created_at >= date_trunc('month', CURRENT_DATE)`);
+            }
+            const approvedOpp = await pool.query(
+                `
+                    SELECT
+                        o.id::text AS display_code,
+                        o.id::text AS id,
+                        o.id::text AS station_code,
+                        COALESCE(NULLIF(o.station_name_if_exists, ''), c.name) AS station_name,
+                        o.city,
+                        lower(o.opportunity_type) AS station_type_code,
+                        'Operational'::text AS station_status_code,
+                        'Approved'::text AS review_status,
+                        'Approved'::text AS project_status,
+                        o.created_at AS project_created_at
+                    FROM investment_opportunities o
+                    JOIN investment_clients c ON c.id = o.client_id
+                    WHERE ${oppWhere.join(' AND ')}
+                    ORDER BY o.created_at DESC
+                `,
+                oppParams,
+            );
+            rows.push(...approvedOpp.rows);
+        }
 
         res.status(200).json({
             bucket,
             stationType,
-            count: result.rows.length,
-            data: result.rows,
+            count: rows.length,
+            data: rows,
         });
     } catch (error: any) {
         console.error('Dashboard station drilldown error:', error);

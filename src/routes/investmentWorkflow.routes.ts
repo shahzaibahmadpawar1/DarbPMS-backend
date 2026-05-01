@@ -22,6 +22,9 @@ router.post('/clients', requireCapability('create'), InvestmentWorkflowControlle
 router.get('/opportunities', requireCapability('view'), InvestmentWorkflowController.listOpportunities);
 router.get('/opportunities/:id', requireCapability('view'), InvestmentWorkflowController.getOpportunity);
 router.post('/opportunities', requireCapability('create'), InvestmentWorkflowController.createOpportunity);
+router.post('/opportunities/:id/ceo/send-contract', requireCapability('edit'), InvestmentWorkflowController.ceoSendOpportunityToContract);
+router.post('/opportunities/:id/ceo/approve', requireCapability('edit'), InvestmentWorkflowController.ceoApproveOpportunity);
+router.post('/opportunities/:id/contract/submit', requireCapability('edit'), InvestmentWorkflowController.submitOpportunityContract);
 
 // Studies
 router.get('/studies', requireCapability('view'), InvestmentWorkflowController.listStudies);
