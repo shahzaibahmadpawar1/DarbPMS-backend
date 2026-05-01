@@ -320,13 +320,25 @@ export class InvestmentWorkflowController {
                         c.name AS client_name,
                         c.id_cr_number AS client_id_cr_number,
                         c.client_type AS client_type,
+                        su.username AS specialist_username,
+                        COALESCE(NULLIF(TRIM(su.full_name), ''), su.username) AS specialist_display_name,
+                        su.email AS specialist_email,
+                        cb.username AS created_by_username,
+                        cb.email AS created_by_email,
                         (
                             SELECT COUNT(*)::int
                             FROM investment_feasibility_studies s
                             WHERE s.opportunity_id = o.id
-                        ) AS studies_count
+                        ) AS studies_count,
+                        (
+                            SELECT COUNT(*)::int
+                            FROM investment_feasibility_studies s2
+                            WHERE s2.opportunity_id = o.id AND s2.status = 'submitted_to_committee'
+                        ) AS submitted_studies_count
                     FROM investment_opportunities o
                     JOIN investment_clients c ON c.id = o.client_id
+                    LEFT JOIN users su ON su.id = o.investment_specialist_user_id
+                    LEFT JOIN users cb ON cb.id = o.created_by
                     ${where}
                     ORDER BY o.created_at DESC
                     LIMIT 500
@@ -357,9 +369,26 @@ export class InvestmentWorkflowController {
 
             const opp = await pool.query(
                 `
-                    SELECT o.*, c.*
+                    SELECT
+                        o.*,
+                        c.name AS client_name,
+                        c.id_cr_number AS client_id_cr_number,
+                        c.client_type AS client_type,
+                        c.phone AS client_phone,
+                        c.contact_person_name AS client_contact_person_name,
+                        c.contact_person_mobile AS client_contact_person_mobile,
+                        c.email AS client_email,
+                        c.address AS client_address,
+                        c.note AS client_note,
+                        su.username AS specialist_username,
+                        COALESCE(NULLIF(TRIM(su.full_name), ''), su.username) AS specialist_display_name,
+                        su.email AS specialist_email,
+                        cb.username AS created_by_username,
+                        cb.email AS created_by_email
                     FROM investment_opportunities o
                     JOIN investment_clients c ON c.id = o.client_id
+                    LEFT JOIN users su ON su.id = o.investment_specialist_user_id
+                    LEFT JOIN users cb ON cb.id = o.created_by
                     WHERE o.id = $1
                     LIMIT 1
                 `,
@@ -550,7 +579,21 @@ export class InvestmentWorkflowController {
                         o.opportunity_date,
                         c.name AS client_name,
                         o.city,
-                        o.region
+                        o.region,
+                        (
+                            SELECT fa.file_url
+                            FROM investment_feasibility_attachments fa
+                            WHERE fa.study_id = s.id
+                            ORDER BY fa.created_at ASC
+                            LIMIT 1
+                        ) AS first_attachment_url,
+                        (
+                            SELECT fa.file_name
+                            FROM investment_feasibility_attachments fa
+                            WHERE fa.study_id = s.id
+                            ORDER BY fa.created_at ASC
+                            LIMIT 1
+                        ) AS first_attachment_name
                     FROM investment_feasibility_studies s
                     JOIN investment_opportunities o ON o.id = s.opportunity_id
                     JOIN investment_clients c ON c.id = o.client_id
@@ -754,7 +797,13 @@ export class InvestmentWorkflowController {
                            o.*,
                            c.name AS client_name,
                            c.id_cr_number AS client_id_cr_number,
-                           c.client_type AS client_type
+                           c.client_type AS client_type,
+                           c.phone AS client_phone,
+                           c.contact_person_name AS client_contact_person_name,
+                           c.contact_person_mobile AS client_contact_person_mobile,
+                           c.email AS client_email,
+                           c.address AS client_address,
+                           c.note AS client_note
                     FROM investment_feasibility_studies s
                     JOIN investment_opportunities o ON o.id = s.opportunity_id
                     JOIN investment_clients c ON c.id = o.client_id
@@ -848,6 +897,12 @@ export class InvestmentWorkflowController {
                         name: row.client_name,
                         id_cr_number: row.client_id_cr_number,
                         client_type: row.client_type,
+                        phone: row.client_phone,
+                        contact_person_name: row.client_contact_person_name,
+                        contact_person_mobile: row.client_contact_person_mobile,
+                        email: row.client_email,
+                        address: row.client_address,
+                        note: row.client_note,
                     },
                     opportunityAttachments: opportunityAttachments.rows,
                     studyAttachments: studyAttachments.rows,
