@@ -981,25 +981,33 @@ export class InvestmentWorkflowController {
                 return;
             }
 
+            const existing = await pool.query(
+                `
+                    SELECT id
+                    FROM investment_committee_opinions
+                    WHERE study_id = $1 AND department = $2
+                    LIMIT 1
+                `,
+                [studyId, deptParam],
+            );
+            if (existing.rows.length) {
+                res.status(409).json({ error: 'Opinion already submitted for this department and cannot be edited' });
+                return;
+            }
+
             const payload = req.body?.opinionPayload ?? {};
 
-            const upsert = await pool.query(
+            const inserted = await pool.query(
                 `
                     INSERT INTO investment_committee_opinions (
                         study_id, department, opinion_payload, submitted_by, submitted_at, updated_at
                     ) VALUES ($1,$2,$3::jsonb,$4,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)
-                    ON CONFLICT (study_id, department)
-                    DO UPDATE SET
-                        opinion_payload = EXCLUDED.opinion_payload,
-                        submitted_by = EXCLUDED.submitted_by,
-                        submitted_at = EXCLUDED.submitted_at,
-                        updated_at = CURRENT_TIMESTAMP
                     RETURNING *
                 `,
                 [studyId, deptParam, JSON.stringify(payload), userId],
             );
 
-            res.status(200).json({ data: upsert.rows[0] });
+            res.status(200).json({ data: inserted.rows[0] });
         } catch (error: any) {
             res.status(500).json({ error: 'Failed to submit opinion', details: error.message });
         }
