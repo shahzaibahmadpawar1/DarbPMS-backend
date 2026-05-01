@@ -1358,6 +1358,46 @@ export class InvestmentWorkflowController {
         }
     }
 
+    static async ceoRejectOpportunity(req: AuthRequest, res: Response): Promise<void> {
+        try {
+            await ensureInvestmentOpportunitiesSchema();
+            const userId = req.user?.id;
+            if (!userId) {
+                res.status(401).json({ error: 'Unauthorized' });
+                return;
+            }
+            if (!isExecutive(req)) {
+                res.status(403).json({ error: 'Only CEO or super admin can reject opportunity' });
+                return;
+            }
+            const opportunityId = String(req.params?.id || '').trim();
+            if (!opportunityId) {
+                res.status(400).json({ error: 'id is required' });
+                return;
+            }
+            const updated = await pool.query(
+                `
+                    UPDATE investment_opportunities
+                    SET workflow_status = 'rejected',
+                        ceo_approved_at = NULL,
+                        ceo_decision_at = CURRENT_TIMESTAMP,
+                        updated_by = $1,
+                        updated_at = CURRENT_TIMESTAMP
+                    WHERE id = $2
+                    RETURNING *
+                `,
+                [userId, opportunityId],
+            );
+            if (!updated.rows.length) {
+                res.status(404).json({ error: 'Opportunity not found' });
+                return;
+            }
+            res.status(200).json({ data: updated.rows[0] });
+        } catch (error: any) {
+            res.status(500).json({ error: 'Failed to reject opportunity', details: error.message });
+        }
+    }
+
     static async listCommitteeInbox(req: AuthRequest, res: Response): Promise<void> {
         try {
             await ensureInvestmentOpportunitiesSchema();
