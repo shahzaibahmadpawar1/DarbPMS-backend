@@ -310,12 +310,29 @@ export class InvestmentWorkflowController {
             }
 
             const role = req.user?.role;
+            const normalizedDept = normalizeDepartment(req.user?.department);
             const baseParams: any[] = [];
             let where = '';
+            const isCommitteeManager =
+                role === 'department_manager'
+                && COMMITTEE_DEPARTMENTS.includes((normalizedDept || '') as CommitteeDepartment);
+
             if (!(role === 'super_admin' || role === 'ceo' || req.user?.department === 'investment')) {
+                if (isCommitteeManager) {
+                    // Committee managers can see opportunities that are in committee-opinion stage.
+                    where = `
+                        WHERE EXISTS (
+                            SELECT 1
+                            FROM investment_feasibility_studies s
+                            WHERE s.opportunity_id = o.id
+                              AND s.status = 'submitted_to_committee'
+                        )
+                    `;
+                } else {
                 // Specialists and assigned contract manager: only see those assigned to them
-                where = `WHERE o.investment_specialist_user_id = $1 OR o.contract_manager_user_id = $1`;
-                baseParams.push(userId);
+                    where = `WHERE o.investment_specialist_user_id = $1 OR o.contract_manager_user_id = $1`;
+                    baseParams.push(userId);
+                }
             }
 
             const result = await pool.query(
@@ -418,6 +435,16 @@ export class InvestmentWorkflowController {
             }
 
             const opportunity = opp.rows[0];
+            const hasCommitteeStudy = await pool.query(
+                `
+                    SELECT 1
+                    FROM investment_feasibility_studies s
+                    WHERE s.opportunity_id = $1
+                      AND s.status = 'submitted_to_committee'
+                    LIMIT 1
+                `,
+                [id],
+            );
 
             // Access: investment dept + executive + assigned specialist
             const role = req.user?.role;
@@ -425,7 +452,8 @@ export class InvestmentWorkflowController {
                 || role === 'ceo'
                 || req.user?.department === 'investment'
                 || String(opportunity.investment_specialist_user_id || '') === userId
-                || String(opportunity.contract_manager_user_id || '') === userId;
+                || String(opportunity.contract_manager_user_id || '') === userId
+                || (requireCommitteeDmOrSuperAdmin(req) && hasCommitteeStudy.rows.length > 0);
             if (!allowed) {
                 res.status(403).json({ error: 'Not allowed' });
                 return;
