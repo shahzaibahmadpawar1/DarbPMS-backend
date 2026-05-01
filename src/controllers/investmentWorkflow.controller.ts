@@ -793,19 +793,51 @@ export class InvestmentWorkflowController {
 
             const studyRes = await pool.query(
                 `
-                    SELECT s.*,
-                           o.*,
-                           c.name AS client_name,
-                           c.id_cr_number AS client_id_cr_number,
-                           c.client_type AS client_type,
-                           c.phone AS client_phone,
-                           c.contact_person_name AS client_contact_person_name,
-                           c.contact_person_mobile AS client_contact_person_mobile,
-                           c.email AS client_email,
-                           c.address AS client_address,
-                           c.note AS client_note,
-                           su.username AS specialist_username,
-                           COALESCE(NULLIF(TRIM(su.full_name), ''), su.username) AS specialist_display_name
+                    SELECT
+                        s.id AS study_id,
+                        s.opportunity_id AS study_opportunity_id,
+                        s.study_status AS study_status_form,
+                        s.expected_property_income AS study_expected_property_income,
+                        s.product_sales AS study_product_sales,
+                        s.expenses AS study_expenses,
+                        s.final_result AS study_final_result,
+                        s.initial_agreement_notes AS study_initial_agreement_notes,
+                        s.status AS study_status_workflow,
+                        s.created_at AS study_created_at,
+                        s.updated_at AS study_updated_at,
+
+                        o.id AS opportunity_id,
+                        o.opportunity_date,
+                        o.opportunity_type,
+                        o.region,
+                        o.city,
+                        o.district,
+                        o.street,
+                        o.street_type,
+                        o.station_name_if_exists,
+                        o.location_status,
+                        o.area_m2,
+                        o.frontage_m,
+                        o.depth_m,
+                        o.location_url,
+                        o.issued_licenses,
+                        o.pending_licenses,
+                        o.investment_specialist_user_id,
+                        o.notes,
+                        o.status AS opportunity_status_workflow,
+
+                        c.name AS client_name,
+                        c.id_cr_number AS client_id_cr_number,
+                        c.client_type AS client_type,
+                        c.phone AS client_phone,
+                        c.contact_person_name AS client_contact_person_name,
+                        c.contact_person_mobile AS client_contact_person_mobile,
+                        c.email AS client_email,
+                        c.address AS client_address,
+                        c.note AS client_note,
+
+                        su.username AS specialist_username,
+                        COALESCE(NULLIF(TRIM(su.full_name), ''), su.username) AS specialist_display_name
                     FROM investment_feasibility_studies s
                     JOIN investment_opportunities o ON o.id = s.opportunity_id
                     JOIN investment_clients c ON c.id = o.client_id
@@ -864,17 +896,17 @@ export class InvestmentWorkflowController {
             res.status(200).json({
                 data: {
                     study: {
-                        id: row.id,
-                        opportunity_id: row.opportunity_id,
-                        study_status: row.study_status,
-                        expected_property_income: row.expected_property_income,
-                        product_sales: row.product_sales,
-                        expenses: row.expenses,
-                        final_result: row.final_result,
-                        initial_agreement_notes: row.initial_agreement_notes,
-                        status: row.status,
-                        created_at: row.created_at,
-                        updated_at: row.updated_at,
+                        id: row.study_id,
+                        opportunity_id: row.study_opportunity_id,
+                        study_status: row.study_status_form,
+                        expected_property_income: row.study_expected_property_income,
+                        product_sales: row.study_product_sales,
+                        expenses: row.study_expenses,
+                        final_result: row.study_final_result,
+                        initial_agreement_notes: row.study_initial_agreement_notes,
+                        status: row.study_status_workflow,
+                        created_at: row.study_created_at,
+                        updated_at: row.study_updated_at,
                     },
                     opportunity: {
                         opportunity_date: row.opportunity_date,
@@ -897,7 +929,7 @@ export class InvestmentWorkflowController {
                         /** For client-side submit permission only; not shown in read-only detail UI. */
                         investment_specialist_user_id: row.investment_specialist_user_id,
                         notes: row.notes,
-                        status: row.status,
+                        status: row.opportunity_status_workflow,
                     },
                     client: {
                         name: row.client_name,
