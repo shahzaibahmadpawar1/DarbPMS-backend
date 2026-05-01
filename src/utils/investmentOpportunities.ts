@@ -22,6 +22,16 @@ export const COMMITTEE_DEPARTMENTS: CommitteeDepartment[] = ['project', 'operati
 export const ensureInvestmentOpportunitiesSchema = async (): Promise<void> => {
     if (investmentOpportunitiesSchemaReady) return;
 
+    const runSafeAlter = async (sql: string): Promise<void> => {
+        try {
+            await pool.query(sql);
+        } catch (error: any) {
+            // In some hosted environments the DB role may not have ALTER privilege.
+            // Do not block request paths; keep backward-compatible behavior.
+            console.warn('[investment schema] non-fatal alter skipped:', error?.message || error);
+        }
+    };
+
     await pool.query(`CREATE EXTENSION IF NOT EXISTS "uuid-ossp";`);
 
     // Location settings (regions/cities) used by Opportunities form
@@ -120,7 +130,7 @@ export const ensureInvestmentOpportunitiesSchema = async (): Promise<void> => {
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_inv_opps_workflow_status ON investment_opportunities(workflow_status);`);
 
     // Migration-safe alters for existing deployments
-    await pool.query(`
+    await runSafeAlter(`
         ALTER TABLE investment_opportunities
             ADD COLUMN IF NOT EXISTS workflow_status VARCHAR(40) NOT NULL DEFAULT 'new'
                 CHECK (workflow_status IN (
@@ -132,16 +142,16 @@ export const ensureInvestmentOpportunitiesSchema = async (): Promise<void> => {
                     'approved'
                 ));
     `);
-    await pool.query(`
+    await runSafeAlter(`
         ALTER TABLE investment_opportunities
             ADD COLUMN IF NOT EXISTS contract_department VARCHAR(20)
                 CHECK (contract_department IN ('project','operation','realestate','investment','finance'));
     `);
-    await pool.query(`ALTER TABLE investment_opportunities ADD COLUMN IF NOT EXISTS contract_manager_user_id UUID REFERENCES users(id) ON DELETE SET NULL;`);
-    await pool.query(`ALTER TABLE investment_opportunities ADD COLUMN IF NOT EXISTS contract_submitted_at TIMESTAMP WITH TIME ZONE;`);
-    await pool.query(`ALTER TABLE investment_opportunities ADD COLUMN IF NOT EXISTS contract_form_data JSONB NOT NULL DEFAULT '{}'::jsonb;`);
-    await pool.query(`ALTER TABLE investment_opportunities ADD COLUMN IF NOT EXISTS ceo_decision_at TIMESTAMP WITH TIME ZONE;`);
-    await pool.query(`ALTER TABLE investment_opportunities ADD COLUMN IF NOT EXISTS ceo_approved_at TIMESTAMP WITH TIME ZONE;`);
+    await runSafeAlter(`ALTER TABLE investment_opportunities ADD COLUMN IF NOT EXISTS contract_manager_user_id UUID REFERENCES users(id) ON DELETE SET NULL;`);
+    await runSafeAlter(`ALTER TABLE investment_opportunities ADD COLUMN IF NOT EXISTS contract_submitted_at TIMESTAMP WITH TIME ZONE;`);
+    await runSafeAlter(`ALTER TABLE investment_opportunities ADD COLUMN IF NOT EXISTS contract_form_data JSONB NOT NULL DEFAULT '{}'::jsonb;`);
+    await runSafeAlter(`ALTER TABLE investment_opportunities ADD COLUMN IF NOT EXISTS ceo_decision_at TIMESTAMP WITH TIME ZONE;`);
+    await runSafeAlter(`ALTER TABLE investment_opportunities ADD COLUMN IF NOT EXISTS ceo_approved_at TIMESTAMP WITH TIME ZONE;`);
 
     await pool.query(`
         CREATE TABLE IF NOT EXISTS investment_opportunity_attachments (

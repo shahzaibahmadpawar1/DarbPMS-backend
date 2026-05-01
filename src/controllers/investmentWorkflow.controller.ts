@@ -824,8 +824,10 @@ export class InvestmentWorkflowController {
                 return;
             }
 
-            const studyRes = await pool.query(
-                `
+            let studyRes;
+            try {
+                studyRes = await pool.query(
+                    `
                     SELECT
                         s.id AS study_id,
                         s.opportunity_id AS study_opportunity_id,
@@ -885,8 +887,78 @@ export class InvestmentWorkflowController {
                     WHERE s.id = $1
                     LIMIT 1
                 `,
-                [id],
-            );
+                    [id],
+                );
+            } catch (primaryError: any) {
+                // Backward-compatible fallback for deployments where new lifecycle columns
+                // are not available yet.
+                if (!String(primaryError?.message || '').toLowerCase().includes('does not exist')) {
+                    throw primaryError;
+                }
+                studyRes = await pool.query(
+                    `
+                    SELECT
+                        s.id AS study_id,
+                        s.opportunity_id AS study_opportunity_id,
+                        s.study_status AS study_status_form,
+                        s.expected_property_income AS study_expected_property_income,
+                        s.product_sales AS study_product_sales,
+                        s.expenses AS study_expenses,
+                        s.final_result AS study_final_result,
+                        s.initial_agreement_notes AS study_initial_agreement_notes,
+                        s.status AS study_status_workflow,
+                        s.created_at AS study_created_at,
+                        s.updated_at AS study_updated_at,
+
+                        o.id AS opportunity_id,
+                        o.opportunity_date,
+                        o.opportunity_type,
+                        o.region,
+                        o.city,
+                        o.district,
+                        o.street,
+                        o.street_type,
+                        o.station_name_if_exists,
+                        o.location_status,
+                        o.area_m2,
+                        o.frontage_m,
+                        o.depth_m,
+                        o.location_url,
+                        o.issued_licenses,
+                        o.pending_licenses,
+                        o.investment_specialist_user_id,
+                        o.notes,
+                        o.status AS opportunity_status_workflow,
+                        'under_study'::text AS opportunity_workflow_status,
+                        NULL::text AS contract_department,
+                        NULL::uuid AS contract_manager_user_id,
+                        NULL::timestamptz AS contract_submitted_at,
+                        '{}'::jsonb AS contract_form_data,
+                        NULL::timestamptz AS ceo_decision_at,
+                        NULL::timestamptz AS ceo_approved_at,
+
+                        c.name AS client_name,
+                        c.id_cr_number AS client_id_cr_number,
+                        c.client_type AS client_type,
+                        c.phone AS client_phone,
+                        c.contact_person_name AS client_contact_person_name,
+                        c.contact_person_mobile AS client_contact_person_mobile,
+                        c.email AS client_email,
+                        c.address AS client_address,
+                        c.note AS client_note,
+
+                        su.username AS specialist_username,
+                        COALESCE(NULLIF(TRIM(su.full_name), ''), su.username) AS specialist_display_name
+                    FROM investment_feasibility_studies s
+                    JOIN investment_opportunities o ON o.id = s.opportunity_id
+                    JOIN investment_clients c ON c.id = o.client_id
+                    LEFT JOIN users su ON su.id = o.investment_specialist_user_id
+                    WHERE s.id = $1
+                    LIMIT 1
+                `,
+                    [id],
+                );
+            }
 
             if (!studyRes.rows.length) {
                 res.status(404).json({ error: 'Study not found' });
