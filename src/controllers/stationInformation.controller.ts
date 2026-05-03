@@ -297,9 +297,14 @@ export const getStationInformationByCode = async (req: Request, res: Response): 
     const { stationCode } = req.params;
 
     try {
+        await ensureSurveySchema();
         const query = `
-            SELECT * FROM station_information 
-            WHERE (id::text = $1 OR station_code = $1)
+            SELECT
+                station_information.*,
+                ${SURVEY_CARD_SELECT_FRAGMENT}
+            FROM station_information
+            ${surveyLatestVersionLateralJoin('station_information.station_code')}
+            WHERE (station_information.id::text = $1 OR station_information.station_code = $1)
               AND NOT EXISTS (
                 SELECT 1
                 FROM investment_projects p
@@ -334,9 +339,11 @@ export const getStationInformationByCode = async (req: Request, res: Response): 
                         'Operational'::text AS station_status_code,
                         o.created_at,
                         o.updated_at,
-                        'Approved'::text AS review_status
+                        'Approved'::text AS review_status,
+                        ${SURVEY_CARD_SELECT_FRAGMENT}
                     FROM investment_opportunities o
                     JOIN investment_clients c ON c.id = o.client_id
+                    ${surveyLatestVersionLateralJoin('o.id::text')}
                     WHERE o.workflow_status = 'approved'
                       AND (o.id::text = $1)
                     LIMIT 1
