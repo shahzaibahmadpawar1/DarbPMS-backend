@@ -9,12 +9,6 @@ const normalizeDepartment = (value: unknown): Department | null => {
     return raw as Department;
 };
 
-const requireInvestmentOrSuperAdmin = (req: AuthRequest): boolean => {
-    const role = req.user?.role;
-    const dept = req.user?.department;
-    return role === 'super_admin' || role === 'ceo' || dept === 'investment';
-};
-
 /** Investment or Franchise department, or executives (for opportunities / shared workflow). */
 const requireInvestmentFranchiseOrExec = (req: AuthRequest): boolean => {
     const role = req.user?.role;
@@ -46,7 +40,7 @@ const isExecutive = (req: AuthRequest): boolean => {
 
 export class InvestmentWorkflowController {
     // -------------------- Location settings (Regions/Cities) --------------------
-    static async listRegions(req: AuthRequest, res: Response): Promise<void> {
+    static async listRegions(_req: AuthRequest, res: Response): Promise<void> {
         try {
             await ensureInvestmentOpportunitiesSchema();
             const result = await pool.query(

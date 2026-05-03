@@ -27,6 +27,7 @@ import fileUploadRoutes from './routes/fileUpload.routes';
 import translationsRoutes from './routes/translations.routes';
 import surveyReportsRoutes from './routes/surveyReports.routes';
 import usersRoutes from './routes/users.routes';
+import appSettingsRoutes from './routes/appSettings.routes';
 import pool from './config/database';
 import { authenticateToken } from './middleware/auth';
 import { ensureWorkflowSchema } from './utils/workflow';
@@ -626,6 +627,7 @@ app.use('/api/files', fileUploadRoutes);
 app.use('/api/translate', translationsRoutes);
 app.use('/api/survey-reports', surveyReportsRoutes);
 app.use('/api/users', usersRoutes);
+app.use('/api/app-settings', appSettingsRoutes);
 
 ensureWorkflowSchema().catch((error) => {
     console.error('Workflow schema bootstrap failed:', error);
