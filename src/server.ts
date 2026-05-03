@@ -33,7 +33,7 @@ import { authenticateToken } from './middleware/auth';
 import { ensureWorkflowSchema } from './utils/workflow';
 import { ensureActivitySchema, normalizeActivityScope, recordActivity } from './utils/activity';
 import { ensureSupabaseBucketExists } from './config/supabase';
-import { ensureSurveySchema } from './utils/survey';
+import { ensureSurveySchema, SURVEY_CARD_SELECT_FRAGMENT, surveyLatestVersionLateralJoin } from './utils/survey';
 import { isSchemaCompatibilityError } from './utils/dbErrors';
 
 // Load environment variables
@@ -320,16 +320,18 @@ const buildDashboardStationQuery = (
         return {
             text: `
                 SELECT
-                    id::text AS id,
-                    station_code,
-                    station_name,
-                    city,
-                    station_type_code,
-                    COALESCE(station_status_code, 'Not Started') AS station_status_code,
-                    created_at AS project_created_at
+                    station_information.id::text AS id,
+                    station_information.station_code,
+                    station_information.station_name,
+                    station_information.city,
+                    station_information.station_type_code,
+                    COALESCE(station_information.station_status_code, 'Not Started') AS station_status_code,
+                    station_information.created_at AS project_created_at,
+                    ${SURVEY_CARD_SELECT_FRAGMENT}
                 FROM station_information
+                ${surveyLatestVersionLateralJoin('station_information.station_code')}
                 ${whereClauses.length ? `WHERE ${whereClauses.join(' AND ')}` : ''}
-                ORDER BY created_at DESC
+                ORDER BY station_information.created_at DESC
             `,
             params,
         };
@@ -921,6 +923,7 @@ app.get('/api/dashboard/activities', authenticateToken, async (req: Request, res
 
 app.get('/api/dashboard/stations', authenticateToken, async (req: Request, res: Response) => {
     try {
+        await ensureSurveySchema();
         const authReq = req as any;
         const userRole = authReq.user?.role;
         const userDepartment = authReq.user?.department;
@@ -963,9 +966,11 @@ app.get('/api/dashboard/stations', authenticateToken, async (req: Request, res: 
                         'Operational'::text AS station_status_code,
                         'Approved'::text AS review_status,
                         'Approved'::text AS project_status,
-                        o.created_at AS project_created_at
+                        o.created_at AS project_created_at,
+                        ${SURVEY_CARD_SELECT_FRAGMENT}
                     FROM investment_opportunities o
                     JOIN investment_clients c ON c.id = o.client_id
+                    ${surveyLatestVersionLateralJoin('o.id::text')}
                     WHERE ${oppWhere.join(' AND ')}
                     ORDER BY o.created_at DESC
                 `,

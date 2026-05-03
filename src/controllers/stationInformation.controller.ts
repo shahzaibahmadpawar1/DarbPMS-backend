@@ -4,6 +4,7 @@ import { normalizeUserRole } from '../utils/roles';
 import { isSchemaCompatibilityError } from '../utils/dbErrors';
 import { UserModel } from '../models/user.model';
 import { recordActivity } from '../utils/activity';
+import { ensureSurveySchema, SURVEY_CARD_SELECT_FRAGMENT, surveyLatestVersionLateralJoin } from '../utils/survey';
 
 const ALLOWED_STATION_TYPES = ['operation', 'rent', 'franchise', 'investment', 'ownership'] as const;
 
@@ -125,6 +126,7 @@ export const createStationInformation = async (req: Request, res: Response): Pro
 // Get all station information
 export const getAllStationInformation = async (req: Request, res: Response): Promise<void> => {
     try {
+        await ensureSurveySchema();
         const userRole = normalizeUserRole((req as any).user?.role);
         const userDepartment = (req as any).user?.department;
         const userType = String((req as any).user?.user_type || 'internal').toLowerCase();
@@ -202,9 +204,13 @@ export const getAllStationInformation = async (req: Request, res: Response): Pro
         }
 
         const stationQuery = `
-            SELECT * FROM station_information
+            SELECT
+                station_information.*,
+                ${SURVEY_CARD_SELECT_FRAGMENT}
+            FROM station_information
+            ${surveyLatestVersionLateralJoin('station_information.station_code')}
             ${conditions.length ? `WHERE ${conditions.join(' AND ')}` : ''}
-            ORDER BY created_at DESC
+            ORDER BY station_information.created_at DESC
         `;
         const result = await pool.query(stationQuery, params);
 
@@ -245,9 +251,11 @@ export const getAllStationInformation = async (req: Request, res: Response): Pro
                 'Operational'::text AS station_status_code,
                 o.created_at,
                 o.updated_at,
-                'Approved'::text AS review_status
+                'Approved'::text AS review_status,
+                ${SURVEY_CARD_SELECT_FRAGMENT}
             FROM investment_opportunities o
             JOIN investment_clients c ON c.id = o.client_id
+            ${surveyLatestVersionLateralJoin('o.id::text')}
             WHERE ${oppConditions.join(' AND ')}
             ORDER BY o.created_at DESC
         `;
