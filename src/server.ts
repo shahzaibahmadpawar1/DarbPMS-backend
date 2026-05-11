@@ -34,6 +34,12 @@ import { ensureWorkflowSchema } from './utils/workflow';
 import { ensureActivitySchema, normalizeActivityScope, recordActivity } from './utils/activity';
 import { ensureSupabaseBucketExists } from './config/supabase';
 import { ensureSurveySchema, SURVEY_CARD_SELECT_FRAGMENT, surveyLatestVersionLateralJoin } from './utils/survey';
+import {
+    STATION_HAS_ANY_FORM_DATA_SQL,
+    STATION_HAS_CEO_APPROVED_PROJECT_SQL,
+    STATION_NEW_LAST_30_DAYS_SQL,
+    STATION_OPENING_SOON_DELIVERY_SQL,
+} from './utils/dashboardStationBuckets';
 import { isSchemaCompatibilityError } from './utils/dbErrors';
 
 // Load environment variables
@@ -298,11 +304,15 @@ const buildDashboardStationQuery = (
         }
 
         if (bucket === 'under-execution') {
-            whereClauses.push(`(station_status_code ILIKE '%execution%' OR station_status_code ILIKE '%progress%')`);
+            whereClauses.push(
+                `(${STATION_HAS_CEO_APPROVED_PROJECT_SQL.trim()}) AND (${STATION_HAS_ANY_FORM_DATA_SQL.trim()})`,
+            );
         }
 
         if (bucket === 'not-started') {
-            whereClauses.push(`(station_status_code ILIKE '%not started%' OR station_status_code IS NULL)`);
+            whereClauses.push(
+                `(${STATION_HAS_CEO_APPROVED_PROJECT_SQL.trim()}) AND NOT (${STATION_HAS_ANY_FORM_DATA_SQL.trim()})`,
+            );
         }
 
         if (bucket === 'operational-stations') {
@@ -310,11 +320,11 @@ const buildDashboardStationQuery = (
         }
 
         if (bucket === 'opening-soon') {
-            whereClauses.push(`(station_status_code ILIKE '%soon%' OR station_status_code ILIKE '%opening%')`);
+            whereClauses.push(STATION_OPENING_SOON_DELIVERY_SQL.trim());
         }
 
         if (bucket === 'new-stations') {
-            whereClauses.push(`created_at >= date_trunc('month', CURRENT_DATE)`);
+            whereClauses.push(STATION_NEW_LAST_30_DAYS_SQL.trim());
         }
 
         return {
@@ -650,6 +660,7 @@ ensureSurveySchema().catch((error) => {
 // ── Dashboard stats (authenticated) ──────────────────────────────────────────
 app.get('/api/dashboard/stats', authenticateToken, async (req: Request, res: Response) => {
     try {
+        await ensureSurveySchema();
         const authReq = req as any;
         const userRole = authReq.user?.role;
         const userDepartment = authReq.user?.department;
@@ -742,12 +753,13 @@ app.get('/api/dashboard/stats', authenticateToken, async (req: Request, res: Res
             queryOneWithFallback('stations summary', `
                 SELECT
                     COUNT(*) AS total,
-                    COUNT(*) FILTER (WHERE station_status_code ILIKE '%execution%' OR station_status_code ILIKE '%progress%') AS under_execution,
-                    COUNT(*) FILTER (WHERE station_status_code ILIKE '%not started%' OR station_status_code IS NULL) AS not_started,
+                    COUNT(*) FILTER (WHERE (${STATION_HAS_CEO_APPROVED_PROJECT_SQL.trim()}) AND (${STATION_HAS_ANY_FORM_DATA_SQL.trim()})) AS under_execution,
+                    COUNT(*) FILTER (WHERE (${STATION_HAS_CEO_APPROVED_PROJECT_SQL.trim()}) AND NOT (${STATION_HAS_ANY_FORM_DATA_SQL.trim()})) AS not_started,
                     COUNT(*) FILTER (WHERE station_status_code ILIKE '%operation%' OR station_status_code ILIKE '%active%') AS operational,
-                    COUNT(*) FILTER (WHERE station_status_code ILIKE '%soon%' OR station_status_code ILIKE '%opening%') AS opening_soon,
-                    COUNT(*) FILTER (WHERE created_at >= date_trunc('month', CURRENT_DATE)) AS new_this_month
+                    COUNT(*) FILTER (WHERE ${STATION_OPENING_SOON_DELIVERY_SQL.trim()}) AS opening_soon,
+                    COUNT(*) FILTER (WHERE ${STATION_NEW_LAST_30_DAYS_SQL.trim()}) AS new_this_month
                 FROM station_information
+                ${surveyLatestVersionLateralJoin('station_information.station_code')}
                 ${stationSummaryWhere}
             `, stationSummaryParams, {
                 total: 0,
@@ -952,7 +964,7 @@ app.get('/api/dashboard/stations', authenticateToken, async (req: Request, res: 
                 oppWhere.push(`lower(o.opportunity_type) = $${oppParams.length}`);
             }
             if (bucket === 'new-stations') {
-                oppWhere.push(`o.created_at >= date_trunc('month', CURRENT_DATE)`);
+                oppWhere.push(`o.created_at >= (CURRENT_TIMESTAMP - INTERVAL '30 days')`);
             }
             const approvedOpp = await pool.query(
                 `
