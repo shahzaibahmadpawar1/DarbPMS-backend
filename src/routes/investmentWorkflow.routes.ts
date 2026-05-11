@@ -25,6 +25,7 @@ router.post('/opportunities', requireCapability('create'), InvestmentWorkflowCon
 router.post('/opportunities/:id/ceo/send-contract', requireCapability('edit'), InvestmentWorkflowController.ceoSendOpportunityToContract);
 router.post('/opportunities/:id/ceo/approve', requireCapability('edit'), InvestmentWorkflowController.ceoApproveOpportunity);
 router.post('/opportunities/:id/ceo/reject', requireCapability('edit'), InvestmentWorkflowController.ceoRejectOpportunity);
+router.post('/opportunities/:id/publish-station', requireCapability('edit'), InvestmentWorkflowController.publishOpportunityStation);
 router.post('/opportunities/:id/contract/submit', requireCapability('edit'), InvestmentWorkflowController.submitOpportunityContract);
 
 // Studies

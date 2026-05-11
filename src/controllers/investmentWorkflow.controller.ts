@@ -2,6 +2,9 @@ import { Response } from 'express';
 import pool from '../config/database';
 import { AuthRequest, Department } from '../types';
 import { ensureInvestmentOpportunitiesSchema, COMMITTEE_DEPARTMENTS, type CommitteeDepartment } from '../utils/investmentOpportunities';
+import { createInitialReviewTaskForProject, upsertStationFromProject } from './workflowTasks.controller';
+import { ensureInvestmentLifecycleSchema } from './investmentProjects.controller';
+import { recordActivity } from '../utils/activity';
 
 const normalizeDepartment = (value: unknown): Department | null => {
     const raw = String(value ?? '').trim().toLowerCase().replace(/[\s-]+/g, '_');
@@ -36,6 +39,12 @@ const requireSuperAdminOnly = (req: AuthRequest): boolean => {
 const isExecutive = (req: AuthRequest): boolean => {
     const role = req.user?.role;
     return role === 'super_admin' || role === 'ceo';
+};
+
+const requireInvestmentDeptManagerOrExec = (req: AuthRequest): boolean => {
+    const role = req.user?.role;
+    const dept = req.user?.department;
+    return role === 'super_admin' || role === 'ceo' || (role === 'department_manager' && dept === 'investment');
 };
 
 export class InvestmentWorkflowController {
@@ -329,6 +338,19 @@ export class InvestmentWorkflowController {
                 }
             }
 
+            const pendingStationOnly =
+                String(req.query?.pendingStationAssignment || '').toLowerCase() === 'true';
+            if (
+                pendingStationOnly
+                && (role === 'super_admin' || role === 'ceo' || req.user?.department === 'investment')
+            ) {
+                if (where) {
+                    where += ` AND o.workflow_status = 'approved_pending_station_assignment'`;
+                } else {
+                    where = `WHERE o.workflow_status = 'approved_pending_station_assignment'`;
+                }
+            }
+
             const result = await pool.query(
                 `
                     SELECT
@@ -521,6 +543,8 @@ export class InvestmentWorkflowController {
             }
             const streetType = String(req.body?.streetType || '').trim().toLowerCase() || null;
             const locationStatus = String(req.body?.locationStatus || '').trim().toLowerCase() || null;
+            const deptTypeRaw = String(req.body?.departmentType || '').trim().toLowerCase();
+            const workflowDepartmentType = deptTypeRaw === 'franchise' ? 'franchise' : 'investment';
 
             const inserted = await pool.query(
                 `
@@ -531,7 +555,7 @@ export class InvestmentWorkflowController {
                         area_m2, frontage_m, depth_m,
                         location_url, issued_licenses, pending_licenses,
                         investment_specialist_user_id,
-                        notes, status, workflow_status,
+                        notes, workflow_department_type, status, workflow_status,
                         created_by, updated_by
                     ) VALUES (
                         $1,$2,$3,
@@ -540,8 +564,8 @@ export class InvestmentWorkflowController {
                         $11,$12,$13,
                         $14,$15,$16,
                         $17,
-                        $18,$19,$20,
-                        $21,$21
+                        $18,$19,$20,$21,
+                        $22,$22
                     )
                     RETURNING *
                 `,
@@ -564,6 +588,7 @@ export class InvestmentWorkflowController {
                     String(req.body?.pendingLicenses || '').trim() || null,
                     specialistUserId,
                     String(req.body?.notes || '').trim() || null,
+                    workflowDepartmentType,
                     'forwarded_to_specialist',
                     'new',
                     userId,
@@ -1333,7 +1358,11 @@ export class InvestmentWorkflowController {
             const updated = await pool.query(
                 `
                     UPDATE investment_opportunities
-                    SET workflow_status = 'approved',
+                    SET workflow_status = CASE
+                            WHEN workflow_status = 'awaiting_ceo_final_approval'
+                                THEN 'approved_pending_station_assignment'
+                            ELSE 'approved'
+                        END,
                         ceo_approved_at = CURRENT_TIMESTAMP,
                         updated_by = $1,
                         updated_at = CURRENT_TIMESTAMP
@@ -1349,6 +1378,241 @@ export class InvestmentWorkflowController {
             res.status(200).json({ data: updated.rows[0] });
         } catch (error: any) {
             res.status(500).json({ error: 'Failed to approve opportunity', details: error.message });
+        }
+    }
+
+    static async publishOpportunityStation(req: AuthRequest, res: Response): Promise<void> {
+        try {
+            await ensureInvestmentOpportunitiesSchema();
+            await ensureInvestmentLifecycleSchema();
+
+            const userId = req.user?.id;
+            if (!userId) {
+                res.status(401).json({ error: 'Unauthorized' });
+                return;
+            }
+            if (!requireInvestmentDeptManagerOrExec(req)) {
+                res.status(403).json({ error: 'Only Investment department managers or executives can publish' });
+                return;
+            }
+
+            const opportunityId = String(req.params?.id || '').trim();
+            const stationCode = String(req.body?.stationCode || '').trim();
+            const stationName = String(req.body?.stationName || '').trim();
+            if (!opportunityId) {
+                res.status(400).json({ error: 'id is required' });
+                return;
+            }
+            if (!stationCode || !stationName) {
+                res.status(400).json({ error: 'stationCode and stationName are required' });
+                return;
+            }
+
+            const existingPeek = await pool.query(
+                `
+                    SELECT id, workflow_status, investment_project_id
+                    FROM investment_opportunities
+                    WHERE id = $1
+                    LIMIT 1
+                `,
+                [opportunityId],
+            );
+            if (!existingPeek.rows.length) {
+                res.status(404).json({ error: 'Opportunity not found' });
+                return;
+            }
+            const peekRow = existingPeek.rows[0];
+            if (peekRow.investment_project_id) {
+                const full = await pool.query(
+                    `SELECT * FROM investment_opportunities WHERE id = $1 LIMIT 1`,
+                    [opportunityId],
+                );
+                res.status(200).json({
+                    data: {
+                        opportunity: full.rows[0],
+                        investmentProjectId: peekRow.investment_project_id,
+                    },
+                });
+                return;
+            }
+            if (String(peekRow.workflow_status || '') !== 'approved_pending_station_assignment') {
+                res.status(409).json({ error: 'Opportunity is not awaiting station assignment' });
+                return;
+            }
+
+            const client = await pool.connect();
+            try {
+                await client.query('BEGIN');
+
+                const locked = await client.query(
+                    `
+                        SELECT *
+                        FROM investment_opportunities
+                        WHERE id = $1
+                        FOR UPDATE
+                    `,
+                    [opportunityId],
+                );
+                if (!locked.rows.length) {
+                    await client.query('ROLLBACK');
+                    res.status(404).json({ error: 'Opportunity not found' });
+                    return;
+                }
+                const opp = locked.rows[0];
+                if (opp.investment_project_id) {
+                    await client.query('COMMIT');
+                    const full = await pool.query(
+                        `SELECT * FROM investment_opportunities WHERE id = $1 LIMIT 1`,
+                        [opportunityId],
+                    );
+                    res.status(200).json({
+                        data: {
+                            opportunity: full.rows[0],
+                            investmentProjectId: opp.investment_project_id,
+                        },
+                    });
+                    return;
+                }
+                if (String(opp.workflow_status || '') !== 'approved_pending_station_assignment') {
+                    await client.query('ROLLBACK');
+                    res.status(409).json({ error: 'Opportunity is not awaiting station assignment' });
+                    return;
+                }
+
+                const dup = await client.query(
+                    `
+                        SELECT 1
+                        FROM (
+                            SELECT 1 FROM station_information WHERE station_code = $1
+                            UNION ALL
+                            SELECT 1 FROM investment_projects WHERE project_code = $1
+                        ) x
+                        LIMIT 1
+                    `,
+                    [stationCode],
+                );
+                if (dup.rows.length) {
+                    await client.query('ROLLBACK');
+                    res.status(409).json({ error: 'Station code already in use' });
+                    return;
+                }
+
+                const deptRaw = String(opp.workflow_department_type || 'investment').trim().toLowerCase();
+                const resolvedDept = deptRaw === 'franchise' ? 'franchise' : 'investment';
+
+                const insertParams = [
+                    resolvedDept,
+                    'Opportunity',
+                    stationName,
+                    stationCode,
+                    opp.city ?? null,
+                    opp.district ?? null,
+                    0,
+                    'Active',
+                    'Investment',
+                    opp.location_url ?? null,
+                    null,
+                    null,
+                    null,
+                    0, 0, 0, 0, 0,
+                    0, 0, 0, 0, 0,
+                    null, null, null, null, null, 'individual',
+                    null, null, null,
+                    stationCode,
+                    true,
+                    new Date(),
+                    userId,
+                    null,
+                    null,
+                    userId,
+                    userId,
+                ];
+
+                const inserted = await client.query(
+                    `
+                        INSERT INTO investment_projects (
+                            department_type, request_type, project_name, project_code, city, district, area,
+                            project_status, contract_type, google_location, priority_level, order_date, request_sender,
+                            super_market, fuel_station, kiosks, retail_shop, drive_through,
+                            super_market_area, fuel_station_area, kiosks_area, retail_shop_area, drive_through_area,
+                            owner_name, owner_contact_no, id_no, national_address, email, owner_type,
+                            design_file_url, documents_url, autocad_url,
+                            station_code, is_submitted, submitted_at, submitted_by, last_saved_at, last_saved_by,
+                            review_status, created_by, updated_by
+                        ) VALUES (
+                            $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,
+                            $14,$15,$16,$17,$18,
+                            $19,$20,$21,$22,$23,
+                            $24,$25,$26,$27,$28,$29,
+                            $30,$31,$32,$33,$34,$35,$36,$37,$38,
+                            'Approved',$39,$40
+                        )
+                        RETURNING *
+                    `,
+                    insertParams,
+                );
+
+                const newProjectId = inserted.rows[0].id as string;
+
+                await upsertStationFromProject(newProjectId, userId, client);
+                await createInitialReviewTaskForProject(newProjectId, userId, {
+                    initialTaskStatus: 'approved',
+                    executor: client,
+                });
+
+                const updatedOpp = await client.query(
+                    `
+                        UPDATE investment_opportunities
+                        SET workflow_status = 'station_published',
+                            investment_project_id = $1,
+                            published_station_code = $2,
+                            published_station_name = $3,
+                            station_published_at = CURRENT_TIMESTAMP,
+                            station_published_by = $4,
+                            updated_by = $4,
+                            updated_at = CURRENT_TIMESTAMP
+                        WHERE id = $5
+                        RETURNING *
+                    `,
+                    [newProjectId, stationCode, stationName, userId, opportunityId],
+                );
+
+                await client.query('COMMIT');
+
+                const opportunity = updatedOpp.rows[0];
+                void recordActivity({
+                    actorId: userId,
+                    action: 'publish_station',
+                    entityType: 'investment_opportunity',
+                    entityId: opportunityId,
+                    summary: `Published station ${stationCode} from opportunity`,
+                    metadata: {
+                        investmentProjectId: newProjectId,
+                        stationCode,
+                        stationName,
+                    },
+                    sourcePath: '/api/investment/opportunities/:id/publish-station',
+                    requestMethod: 'POST',
+                }).catch((err) => console.error('Activity log failed:', err));
+
+                res.status(200).json({
+                    data: {
+                        opportunity,
+                        investmentProjectId: newProjectId,
+                    },
+                });
+            } catch (inner: any) {
+                await client.query('ROLLBACK');
+                if (inner.code === '23505') {
+                    res.status(409).json({ error: 'Station or project code already exists' });
+                    return;
+                }
+                throw inner;
+            } finally {
+                client.release();
+            }
+        } catch (error: any) {
+            res.status(500).json({ error: 'Failed to publish station', details: error.message });
         }
     }
 

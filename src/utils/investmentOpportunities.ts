@@ -15,7 +15,10 @@ export type OpportunityWorkflowStatus =
     | 'awaiting_ceo_decision'
     | 'contract_in_progress'
     | 'awaiting_ceo_final_approval'
-    | 'approved';
+    | 'approved_pending_station_assignment'
+    | 'station_published'
+    | 'approved'
+    | 'rejected';
 
 export const COMMITTEE_DEPARTMENTS: CommitteeDepartment[] = ['project', 'operation', 'realestate', 'investment', 'finance'];
 
@@ -100,6 +103,8 @@ export const ensureInvestmentOpportunitiesSchema = async (): Promise<void> => {
             notes TEXT,
             status VARCHAR(30) NOT NULL DEFAULT 'forwarded_to_specialist'
                 CHECK (status IN ('draft','forwarded_to_specialist')),
+            workflow_department_type VARCHAR(20)
+                CHECK (workflow_department_type IS NULL OR workflow_department_type IN ('investment','franchise')),
             workflow_status VARCHAR(40) NOT NULL DEFAULT 'new'
                 CHECK (workflow_status IN (
                     'new',
@@ -107,8 +112,16 @@ export const ensureInvestmentOpportunitiesSchema = async (): Promise<void> => {
                     'awaiting_ceo_decision',
                     'contract_in_progress',
                     'awaiting_ceo_final_approval',
-                    'approved'
+                    'approved_pending_station_assignment',
+                    'station_published',
+                    'approved',
+                    'rejected'
                 )),
+            published_station_code VARCHAR(100),
+            published_station_name VARCHAR(255),
+            investment_project_id UUID,
+            station_published_at TIMESTAMP WITH TIME ZONE,
+            station_published_by UUID REFERENCES users(id) ON DELETE SET NULL,
             contract_department VARCHAR(20)
                 CHECK (contract_department IN ('project','operation','realestate','investment','finance')),
             contract_manager_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
@@ -130,17 +143,54 @@ export const ensureInvestmentOpportunitiesSchema = async (): Promise<void> => {
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_inv_opps_workflow_status ON investment_opportunities(workflow_status);`);
 
     // Migration-safe alters for existing deployments
+    await runSafeAlter(`ALTER TABLE investment_opportunities ADD COLUMN IF NOT EXISTS workflow_department_type VARCHAR(20);`);
+    await runSafeAlter(`ALTER TABLE investment_opportunities ADD COLUMN IF NOT EXISTS published_station_code VARCHAR(100);`);
+    await runSafeAlter(`ALTER TABLE investment_opportunities ADD COLUMN IF NOT EXISTS published_station_name VARCHAR(255);`);
+    await runSafeAlter(`ALTER TABLE investment_opportunities ADD COLUMN IF NOT EXISTS investment_project_id UUID;`);
+    await runSafeAlter(`ALTER TABLE investment_opportunities ADD COLUMN IF NOT EXISTS station_published_at TIMESTAMP WITH TIME ZONE;`);
+    await runSafeAlter(`ALTER TABLE investment_opportunities ADD COLUMN IF NOT EXISTS station_published_by UUID REFERENCES users(id) ON DELETE SET NULL;`);
+    await runSafeAlter(`
+        DO $$
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1 FROM pg_constraint
+                WHERE conrelid = 'investment_opportunities'::regclass
+                  AND conname = 'investment_opportunities_investment_project_id_fkey'
+            ) THEN
+                ALTER TABLE investment_opportunities
+                    ADD CONSTRAINT investment_opportunities_investment_project_id_fkey
+                    FOREIGN KEY (investment_project_id) REFERENCES investment_projects(id) ON DELETE SET NULL;
+            END IF;
+        EXCEPTION WHEN duplicate_object THEN NULL;
+        END $$;
+    `);
     await runSafeAlter(`
         ALTER TABLE investment_opportunities
-            ADD COLUMN IF NOT EXISTS workflow_status VARCHAR(40) NOT NULL DEFAULT 'new'
-                CHECK (workflow_status IN (
-                    'new',
-                    'under_study',
-                    'awaiting_ceo_decision',
-                    'contract_in_progress',
-                    'awaiting_ceo_final_approval',
-                    'approved'
-                ));
+            DROP CONSTRAINT IF EXISTS investment_opportunities_workflow_department_type_check;
+    `);
+    await runSafeAlter(`
+        ALTER TABLE investment_opportunities
+            ADD CONSTRAINT investment_opportunities_workflow_department_type_check
+            CHECK (workflow_department_type IS NULL OR workflow_department_type IN ('investment','franchise'));
+    `);
+    await runSafeAlter(`
+        ALTER TABLE investment_opportunities
+            DROP CONSTRAINT IF EXISTS investment_opportunities_workflow_status_check;
+    `);
+    await runSafeAlter(`
+        ALTER TABLE investment_opportunities
+            ADD CONSTRAINT investment_opportunities_workflow_status_check
+            CHECK (workflow_status IN (
+                'new',
+                'under_study',
+                'awaiting_ceo_decision',
+                'contract_in_progress',
+                'awaiting_ceo_final_approval',
+                'approved_pending_station_assignment',
+                'station_published',
+                'approved',
+                'rejected'
+            ));
     `);
     await runSafeAlter(`
         ALTER TABLE investment_opportunities

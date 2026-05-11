@@ -6,7 +6,7 @@ import { recordActivity } from '../utils/activity';
 
 let investmentLifecycleSchemaReady = false;
 
-const ensureInvestmentLifecycleSchema = async (): Promise<void> => {
+export const ensureInvestmentLifecycleSchema = async (): Promise<void> => {
     if (investmentLifecycleSchemaReady) {
         return;
     }
@@ -33,9 +33,8 @@ const ensureInvestmentLifecycleSchema = async (): Promise<void> => {
     `);
     await pool.query(`
         ALTER TABLE investment_projects
-        ADD COLUMN IF NOT EXISTS last_saved_by UUID REFERENCES users(id) ON DELETE SET NULL;
+        ADD COLUMN IF NOT EXISTS review_status VARCHAR(50);
     `);
-
     await pool.query(`
         UPDATE investment_projects
         SET is_submitted = TRUE,

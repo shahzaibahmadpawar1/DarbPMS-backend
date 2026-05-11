@@ -1,5 +1,8 @@
 import { Response } from 'express';
 import pool from '../config/database';
+
+/** Pool or transaction client — same `.query` surface for transactional helpers. */
+export type PgExecutor = Pick<typeof pool, 'query'>;
 import { AuthRequest } from '../types';
 import { ensureWorkflowSchema, WorkflowTaskFlowType, recordWorkflowTransition } from '../utils/workflow';
 import { ensureFeasibilitySchema, FEASIBILITY_REVIEW_DEPARTMENTS, type FeasibilityReviewDepartment } from '../utils/feasibility';
@@ -194,8 +197,12 @@ export const createContractRequestTask = async (req: AuthRequest, res: Response)
     }
 };
 
-export const upsertStationFromProject = async (projectId: string, userId: string): Promise<void> => {
-    const projectResult = await pool.query('SELECT * FROM investment_projects WHERE id = $1 LIMIT 1', [projectId]);
+export const upsertStationFromProject = async (
+    projectId: string,
+    userId: string,
+    executor: PgExecutor = pool,
+): Promise<void> => {
+    const projectResult = await executor.query('SELECT * FROM investment_projects WHERE id = $1 LIMIT 1', [projectId]);
     if (!projectResult.rows.length) {
         return;
     }
@@ -208,7 +215,7 @@ export const upsertStationFromProject = async (projectId: string, userId: string
         throw new Error('Station creation failed: project code and project name are required');
     }
 
-    await pool.query(`
+    await executor.query(`
         INSERT INTO station_information (
             station_code, station_name, city, district,
             geographic_location, station_type_code, station_status_code,
@@ -1390,10 +1397,14 @@ export const getWorkflowTaskHistory = async (req: AuthRequest, res: Response): P
 export const createInitialReviewTaskForProject = async (
     projectId: string,
     actorId: string,
+    options?: { initialTaskStatus?: string; executor?: PgExecutor },
 ): Promise<void> => {
     await ensureWorkflowSchema();
 
-    const projectResult = await pool.query(
+    const initialTaskStatus = options?.initialTaskStatus === 'approved' ? 'approved' : 'manager_queue';
+    const executor = options?.executor ?? pool;
+
+    const projectResult = await executor.query(
         'SELECT id, project_name, project_code, department_type FROM investment_projects WHERE id = $1 LIMIT 1',
         [projectId],
     );
@@ -1401,7 +1412,7 @@ export const createInitialReviewTaskForProject = async (
         return;
     }
 
-    const existing = await pool.query(
+    const existing = await executor.query(
         // For feasibility submissions, a shared feasibility task already exists.
         // We only want to prevent duplicates of the *standard* (non-feasibility) workflow.
         `SELECT id
@@ -1416,7 +1427,7 @@ export const createInitialReviewTaskForProject = async (
     }
 
     const project = projectResult.rows[0];
-    await pool.query(`
+    await executor.query(`
         INSERT INTO project_workflow_tasks (
             investment_project_id,
             title,
@@ -1424,10 +1435,11 @@ export const createInitialReviewTaskForProject = async (
             flow_type,
             origin_department,
             target_department,
+            status,
             created_by,
             assigned_by
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $7)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8)
     `, [
         project.id,
         `Initial Review - ${project.project_name}`,
@@ -1435,10 +1447,11 @@ export const createInitialReviewTaskForProject = async (
         'documents',
         'project',
         'project',
+        initialTaskStatus,
         actorId,
     ]);
 
-    const insertedTask = await pool.query(
+    const insertedTask = await executor.query(
         'SELECT id FROM project_workflow_tasks WHERE investment_project_id = $1 ORDER BY created_at DESC LIMIT 1',
         [project.id],
     );
@@ -1448,7 +1461,7 @@ export const createInitialReviewTaskForProject = async (
             entityType: 'workflow_task',
             entityId: insertedTask.rows[0].id,
             oldState: null,
-            newState: 'manager_queue',
+            newState: initialTaskStatus,
             changedBy: actorId,
             note: 'Initial review task auto-created',
             metadata: {
