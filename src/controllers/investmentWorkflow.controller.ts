@@ -1528,7 +1528,7 @@ export class InvestmentWorkflowController {
                     opp.city ?? null,
                     opp.district ?? null,
                     0,
-                    'Active',
+                    'Operational',
                     'Investment',
                     opp.location_url ?? null,
                     null,
@@ -1538,7 +1538,7 @@ export class InvestmentWorkflowController {
                     0, 0, 0, 0, 0,
                     null, null, null, null, null, 'individual',
                     null, null, null,
-                    stationCode,
+                    null,
                     true,
                     new Date(),
                     userId,
@@ -1575,6 +1575,15 @@ export class InvestmentWorkflowController {
                 const newProjectId = inserted.rows[0].id as string;
 
                 await upsertStationFromProject(newProjectId, userId, client);
+                await client.query(
+                    `
+                        UPDATE investment_projects
+                        SET station_code = project_code
+                        WHERE id = $1
+                          AND (station_code IS NULL OR station_code = '')
+                    `,
+                    [newProjectId],
+                );
                 await createInitialReviewTaskForProject(newProjectId, userId, {
                     initialTaskStatus: 'approved',
                     executor: client,
@@ -1625,6 +1634,13 @@ export class InvestmentWorkflowController {
                 await client.query('ROLLBACK');
                 if (inner.code === '23505') {
                     res.status(409).json({ error: 'Station or project code already exists' });
+                    return;
+                }
+                if (inner.code === '23503') {
+                    res.status(409).json({
+                        error: 'Cannot publish: related record conflict (e.g. station or user reference)',
+                        details: inner.message,
+                    });
                     return;
                 }
                 throw inner;
