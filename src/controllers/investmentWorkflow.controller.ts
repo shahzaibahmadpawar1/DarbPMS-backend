@@ -5,6 +5,7 @@ import { ensureInvestmentOpportunitiesSchema, COMMITTEE_DEPARTMENTS, type Commit
 import { createInitialReviewTaskForProject, upsertStationFromProject } from './workflowTasks.controller';
 import { ensureInvestmentLifecycleSchema } from './investmentProjects.controller';
 import { recordActivity } from '../utils/activity';
+import { ensureWorkflowSchema, recordWorkflowTransition } from '../utils/workflow';
 
 const normalizeDepartment = (value: unknown): Department | null => {
     const raw = String(value ?? '').trim().toLowerCase().replace(/[\s-]+/g, '_');
@@ -1405,6 +1406,7 @@ export class InvestmentWorkflowController {
         try {
             await ensureInvestmentOpportunitiesSchema();
             await ensureInvestmentLifecycleSchema();
+            await ensureWorkflowSchema();
 
             const userId = req.user?.id;
             if (!userId) {
@@ -1459,6 +1461,14 @@ export class InvestmentWorkflowController {
                 res.status(409).json({ error: 'Opportunity is not awaiting station assignment' });
                 return;
             }
+
+            let publishCommitted:
+                | {
+                      opportunity: Record<string, unknown>;
+                      investmentProjectId: string;
+                      initialTaskId: string | null;
+                  }
+                | undefined;
 
             const client = await pool.connect();
             try {
@@ -1584,9 +1594,10 @@ export class InvestmentWorkflowController {
                     `,
                     [newProjectId],
                 );
-                await createInitialReviewTaskForProject(newProjectId, userId, {
+                const initialTaskId = await createInitialReviewTaskForProject(newProjectId, userId, {
                     initialTaskStatus: 'approved',
                     executor: client,
+                    skipWorkflowAudit: true,
                 });
 
                 const updatedOpp = await client.query(
@@ -1608,28 +1619,11 @@ export class InvestmentWorkflowController {
 
                 await client.query('COMMIT');
 
-                const opportunity = updatedOpp.rows[0];
-                void recordActivity({
-                    actorId: userId,
-                    action: 'publish_station',
-                    entityType: 'investment_opportunity',
-                    entityId: opportunityId,
-                    summary: `Published station ${stationCode} from opportunity`,
-                    metadata: {
-                        investmentProjectId: newProjectId,
-                        stationCode,
-                        stationName,
-                    },
-                    sourcePath: '/api/investment/opportunities/:id/publish-station',
-                    requestMethod: 'POST',
-                }).catch((err) => console.error('Activity log failed:', err));
-
-                res.status(200).json({
-                    data: {
-                        opportunity,
-                        investmentProjectId: newProjectId,
-                    },
-                });
+                publishCommitted = {
+                    opportunity: updatedOpp.rows[0],
+                    investmentProjectId: newProjectId,
+                    initialTaskId,
+                };
             } catch (inner: any) {
                 await client.query('ROLLBACK');
                 if (inner.code === '23505') {
@@ -1646,6 +1640,45 @@ export class InvestmentWorkflowController {
                 throw inner;
             } finally {
                 client.release();
+            }
+
+            if (publishCommitted?.initialTaskId) {
+                await recordWorkflowTransition({
+                    entityType: 'workflow_task',
+                    entityId: publishCommitted.initialTaskId,
+                    oldState: null,
+                    newState: 'approved',
+                    changedBy: userId,
+                    note: 'Initial review task auto-created',
+                    metadata: {
+                        projectId: publishCommitted.investmentProjectId,
+                        stage: 'initial_review',
+                    },
+                });
+            }
+
+            if (publishCommitted) {
+                void recordActivity({
+                    actorId: userId,
+                    action: 'publish_station',
+                    entityType: 'investment_opportunity',
+                    entityId: opportunityId,
+                    summary: `Published station ${stationCode} from opportunity`,
+                    metadata: {
+                        investmentProjectId: publishCommitted.investmentProjectId,
+                        stationCode,
+                        stationName,
+                    },
+                    sourcePath: '/api/investment/opportunities/:id/publish-station',
+                    requestMethod: 'POST',
+                }).catch((err) => console.error('Activity log failed:', err));
+
+                res.status(200).json({
+                    data: {
+                        opportunity: publishCommitted.opportunity,
+                        investmentProjectId: publishCommitted.investmentProjectId,
+                    },
+                });
             }
         } catch (error: any) {
             res.status(500).json({ error: 'Failed to publish station', details: error.message });

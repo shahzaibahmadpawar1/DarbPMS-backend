@@ -1397,9 +1397,14 @@ export const getWorkflowTaskHistory = async (req: AuthRequest, res: Response): P
 export const createInitialReviewTaskForProject = async (
     projectId: string,
     actorId: string,
-    options?: { initialTaskStatus?: string; executor?: PgExecutor },
-): Promise<void> => {
-    await ensureWorkflowSchema();
+    options?: { initialTaskStatus?: string; executor?: PgExecutor; skipWorkflowAudit?: boolean },
+): Promise<string | null> => {
+    // When using a transaction client, the caller must run ensureWorkflowSchema() first.
+    // Otherwise with pool max=1 (common on Vercel) pool.connect() + ensureWorkflowSchema()
+    // deadlocks waiting for a second connection.
+    if (!options?.executor) {
+        await ensureWorkflowSchema();
+    }
 
     const initialTaskStatus = options?.initialTaskStatus === 'approved' ? 'approved' : 'manager_queue';
     const executor = options?.executor ?? pool;
@@ -1409,7 +1414,7 @@ export const createInitialReviewTaskForProject = async (
         [projectId],
     );
     if (!projectResult.rows.length) {
-        return;
+        return null;
     }
 
     const existing = await executor.query(
@@ -1423,7 +1428,7 @@ export const createInitialReviewTaskForProject = async (
         [projectId],
     );
     if (existing.rows.length) {
-        return;
+        return null;
     }
 
     const project = projectResult.rows[0];
@@ -1457,19 +1462,24 @@ export const createInitialReviewTaskForProject = async (
     );
 
     if (insertedTask.rows.length) {
-        await recordWorkflowTransition({
-            entityType: 'workflow_task',
-            entityId: insertedTask.rows[0].id,
-            oldState: null,
-            newState: initialTaskStatus,
-            changedBy: actorId,
-            note: 'Initial review task auto-created',
-            metadata: {
-                projectId,
-                stage: 'initial_review',
-            },
-        });
+        const taskId = insertedTask.rows[0].id as string;
+        if (!options?.skipWorkflowAudit) {
+            await recordWorkflowTransition({
+                entityType: 'workflow_task',
+                entityId: taskId,
+                oldState: null,
+                newState: initialTaskStatus,
+                changedBy: actorId,
+                note: 'Initial review task auto-created',
+                metadata: {
+                    projectId,
+                    stage: 'initial_review',
+                },
+            });
+        }
+        return taskId;
     }
+    return null;
 };
 
 export const submitManagerAttachment = async (req: AuthRequest, res: Response): Promise<void> => {
