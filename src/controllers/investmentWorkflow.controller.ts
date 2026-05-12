@@ -1355,24 +1355,44 @@ export class InvestmentWorkflowController {
                 res.status(400).json({ error: 'id is required' });
                 return;
             }
+
+            const current = await pool.query(
+                `
+                    SELECT workflow_status
+                    FROM investment_opportunities
+                    WHERE id = $1
+                    LIMIT 1
+                `,
+                [opportunityId],
+            );
+            if (!current.rows.length) {
+                res.status(404).json({ error: 'Opportunity not found' });
+                return;
+            }
+            const ws = String(current.rows[0]?.workflow_status || '');
+            if (ws !== 'awaiting_ceo_decision' && ws !== 'awaiting_ceo_final_approval') {
+                res.status(400).json({
+                    error: 'Opportunity is not awaiting CEO approval',
+                    workflowStatus: ws,
+                });
+                return;
+            }
+
             const updated = await pool.query(
                 `
                     UPDATE investment_opportunities
-                    SET workflow_status = CASE
-                            WHEN workflow_status = 'awaiting_ceo_final_approval'
-                                THEN 'approved_pending_station_assignment'
-                            ELSE 'approved'
-                        END,
+                    SET workflow_status = 'approved_pending_station_assignment',
                         ceo_approved_at = CURRENT_TIMESTAMP,
                         updated_by = $1,
                         updated_at = CURRENT_TIMESTAMP
                     WHERE id = $2
+                      AND workflow_status IN ('awaiting_ceo_decision', 'awaiting_ceo_final_approval')
                     RETURNING *
                 `,
                 [userId, opportunityId],
             );
             if (!updated.rows.length) {
-                res.status(404).json({ error: 'Opportunity not found' });
+                res.status(409).json({ error: 'Opportunity state changed; refresh and try again' });
                 return;
             }
             res.status(200).json({ data: updated.rows[0] });
