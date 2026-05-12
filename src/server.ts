@@ -51,13 +51,20 @@ const isProduction = process.env.NODE_ENV === 'production';
 const slowRequestThresholdMs = Number(process.env.SLOW_REQUEST_THRESHOLD_MS || 800);
 
 // Middleware
-const extraOrigins = (process.env.CORS_ORIGIN || '')
-    .split(',')
-    .map((origin) => origin.trim())
-    .filter(Boolean);
+const extraOrigins = [
+    ...(process.env.CORS_ORIGIN || '')
+        .split(',')
+        .map((origin) => origin.trim())
+        .filter(Boolean),
+    ...(process.env.CORS_ORIGINS || '')
+        .split(',')
+        .map((origin) => origin.trim())
+        .filter(Boolean),
+];
 
 const allowedOrigins = [
     'http://localhost:5173',
+    'http://localhost:5174',
     'http://localhost:5176',
     'http://localhost:3000',
     'https://stg.pms.darbstations.com.sa',
@@ -85,13 +92,17 @@ const isLocalhostDevOrigin = (origin: string): boolean => {
 
 const corsOptions: CorsOptions = {
     origin: (origin, callback) => {
+        // No Origin: same-origin or non-browser clients — allow without reflecting.
         if (!origin) {
             callback(null, true);
             return;
         }
 
         if (allowedOrigins.includes(origin) || isLocalhostDevOrigin(origin)) {
-            callback(null, true);
+            // Reflect the exact requesting origin (required when credentials: true).
+            // Using `true` can mis-reflect behind some proxies; explicit string avoids
+            // "Allow-Origin is 5174 but page is 5173" mismatches.
+            callback(null, origin);
             return;
         }
 
